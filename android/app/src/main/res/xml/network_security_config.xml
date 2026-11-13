@@ -1,6 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
+    <base-config cleartextTrafficPermitted="false">
+        <!--
+          Trust user-installed CAs in addition to the system store so
+          self-hosted sync servers with self-signed or private-CA certificates
+          work once the certificate is installed under Android's
+          Settings > Security > Encryption & credentials > Install a certificate.
+          Since Android 7 (API 24) apps ignore user CAs unless they opt in here.
+        -->
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">127.0.0.1</domain>
         <domain includeSubdomains="false">localhost</domain>
