@@ -77,6 +77,23 @@ class AuthenticationActivityContractTest {
         assertEquals("true", baseConfig.getAttribute("cleartextTrafficPermitted"))
     }
 
+    @Test
+    fun `all builds trust user installed certificate authorities`() {
+        for (path in listOf(
+            "src/main/res/xml/network_security_config.xml",
+            "src/debug/res/xml/network_security_config.xml",
+        )) {
+            val config = DocumentBuilderFactory.newInstance()
+                .newDocumentBuilder()
+                .parse(File(path))
+            val baseConfig = config.getElementsByTagName("base-config").item(0) as Element
+            val sources = baseConfig.getElementsByTagName("certificates").let { certs ->
+                (0 until certs.length).map { (certs.item(it) as Element).getAttribute("src") }.toSet()
+            }
+            assertEquals(path, setOf("system", "user"), sources)
+        }
+    }
+
     private fun mainActivity(): Element {
         val document = manifest()
         val activities = document.getElementsByTagName("activity")
