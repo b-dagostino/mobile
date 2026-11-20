@@ -44,7 +44,8 @@ let package = Package(
         .library(name: "LogseqModel", type: .dynamic, targets: ["LogseqModel"]),
     ],
     dependencies: [
-        .package(url: "ssh://git@github.com/logseq/lui.git", revision: "cf618462e1c55e65a19f24a67f832137fb9fb667")
+        .package(url: "ssh://git@github.com/logseq/lui.git", revision: "8b8c0f423c0bdfdab8a9acb1b83d6762bc28934e"),
+        .package(url: "https://github.com/getsentry/sentry-cocoa.git", exact: "9.27.0")
     ],
     targets: [
         .executableTarget(
@@ -55,7 +56,8 @@ let package = Package(
         ),
         .target(name: "Logseq", dependencies: [
             "LogseqModel",
-            .product(name: "LUIAppleBackendStatic", package: "lui")
+            .product(name: "LUIAppleBackendStatic", package: "lui"),
+            .product(name: "SentrySPM", package: "sentry-cocoa", condition: .when(platforms: [.iOS]))
         ],
         resources: [.process("Resources")],
         linkerSettings: logseqLinkerSettings),

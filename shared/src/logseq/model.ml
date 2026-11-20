@@ -130,6 +130,8 @@ type outline_row =
   ; row_list_number : int option
   ; row_display_type : string option
   ; row_is_embed : bool
+  ; row_embed_source_uuid : string option
+  ; row_embed_children : outline_row list
   ; markup_json : string
   ; query_json : string
   ; youtube_target_url : string option
@@ -442,6 +444,7 @@ type logseq_model =
   ; outliner_rows : outline_row list
   ; outliner_selected_block_ids : string list
   ; outliner_editing : outliner_editing option
+  ; outliner_edit_scope : string option
   ; outliner_selection_revision : int
   ; outliner_autocomplete : outliner_autocomplete option
   ; outliner_autocomplete_candidates : outliner_autocomplete_candidate list
@@ -494,6 +497,7 @@ type logseq_action =
   | ApplyCoreSnapshot of core_projection
   | BeginOutlinerEdit of string
   | BeginOutlinerEditAt of string * int
+  | BeginEmbeddedOutlinerEdit of string * string * int option
   | EditorCompletion of string * string
   | PasteOutlinerContent of string * string
   | PasteOutlinerText of string * string * int
@@ -502,6 +506,7 @@ type logseq_action =
   | BackspaceOutlinerEditor of string * string * int
   | MoveOutlinerCaret of string * int
   | ToggleOutlinerCollapsed of string
+  | ToggleReferenceCollapsed of string * bool
   | LongPressOutlinerBlock of string
   | BeginOutlinerDrag of string
   | DropOutlinerBlocks of string * string
@@ -805,6 +810,7 @@ let initial () =
     outliner_rows = [];
     outliner_selected_block_ids = [];
     outliner_editing = None;
+    outliner_edit_scope = None;
     outliner_selection_revision = 0;
     outliner_autocomplete = None;
     outliner_autocomplete_candidates = [];
@@ -1528,7 +1534,7 @@ let enqueue_effect (current : logseq_model) eff =
   }
 
 let cancel_outliner_editing (current : logseq_model) =
-  let current = cancel_outliner_autosave current in
+  let current = { (cancel_outliner_autosave current) with outliner_edit_scope = None } in
   match current.outliner_editing with
   | Some _ ->
     let updated =
@@ -2124,6 +2130,12 @@ let rec update (current : logseq_model) action =
     else current
   | ApplyCoreSnapshot projection ->
     let applied = if projection.is_pdf_patch then current else apply_core_snapshot current projection in
+    (* The block editor takes ownership of keyboard focus. Retaining an expanded
+       composer here would remount its autofocus field when editing ends. *)
+    let applied = if applied.outliner_editing <> None
+        && (applied.composer_expanded || applied.composer_autofocus) then
+        {applied with composer_expanded = false; composer_autofocus = false}
+      else applied in
     let applied =
       if applied.selected_graph_id <> current.selected_graph_id then {applied with pdf_workspace = None}
       else match applied.pdf_workspace, projection.pdf_update with
@@ -2156,11 +2168,16 @@ let rec update (current : logseq_model) action =
      | _ -> updated)
   | BeginOutlinerEdit uuid ->
     let id = current.next_effect_id in
-    enqueue_effect current (TapOutlinerBlockEffect (id, uuid))
+    enqueue_effect {current with outliner_edit_scope = None} (TapOutlinerBlockEffect (id, uuid))
   | BeginOutlinerEditAt (uuid, caret) ->
-    enqueue_effect current (EditorOutlinerEventEffect (current.next_effect_id,
+    enqueue_effect {current with outliner_edit_scope = None} (EditorOutlinerEventEffect (current.next_effect_id,
       Yojson.Basic.to_string (`Assoc ["type", `String "tapBlock"; "uuid", `String uuid;
         "caretUTF16Offset", `Int caret])))
+  | BeginEmbeddedOutlinerEdit (scope, uuid, caret) ->
+    let action = match caret with
+      | Some offset -> BeginOutlinerEditAt (uuid, offset)
+      | None -> BeginOutlinerEdit uuid in
+    { (update current action) with outliner_edit_scope = Some scope }
   | EditorCompletion (kind, value) ->
     let fields = if kind = "searchAutocomplete" then ["query", `String value]
       else if kind = "submitAutocomplete" then ["value", `String value] else [] in
@@ -2224,6 +2241,10 @@ let rec update (current : logseq_model) action =
   | ToggleOutlinerCollapsed uuid ->
     let id = current.next_effect_id in
     enqueue_effect current (ToggleOutlinerCollapsedEffect (id, uuid))
+  | ToggleReferenceCollapsed (uuid, collapsed) ->
+    enqueue_effect current (EditorOutlinerEventEffect (current.next_effect_id,
+      Yojson.Basic.to_string (`Assoc ["type", `String "toggleCollapsed";
+        "uuid", `String uuid; "reference", `Bool true; "collapsed", `Bool collapsed])))
   | LongPressOutlinerBlock uuid ->
     let id = current.next_effect_id in
     enqueue_effect current (LongPressOutlinerBlockEffect (id, uuid))
@@ -2589,7 +2610,7 @@ let rec update (current : logseq_model) action =
     if List.exists (function AddRootBlockEffect (_, parent) -> parent = uuid | _ -> false)
       (current.pending_effects @ current.in_flight_effects) then current
     else let id = current.next_effect_id in
-      enqueue_effect current (AddRootBlockEffect (id, uuid))
+      enqueue_effect {current with outliner_edit_scope = None} (AddRootBlockEffect (id, uuid))
   | LoadOlderJournals ->
     if current.graph_loading || load_older_journals_active_ current then current
     else begin
@@ -3125,8 +3146,13 @@ and apply_core_snapshot (current : logseq_model)
     else
       let uuid, rows = Option.get projection.reference_update in
       let selected = Option.map (fun (page : sidebar_page) -> page.uuid) current.selected_page = Some uuid in
+      let journal_home = current.node_routes = [] && current.selected_page = None
+        && match current.journal_outliner_rows with
+           | first :: _ -> first.page_id = uuid
+           | [] -> false in
       { current with
-        related_rows = (if selected && not current.selected_page_is_tag then rows else current.related_rows);
+        related_rows = (if (selected && not current.selected_page_is_tag) || journal_home
+          then rows else current.related_rows);
         linked_reference_rows = (if selected && current.selected_page_is_tag then rows else current.linked_reference_rows);
         node_routes = List.map (fun (route : node_projection) ->
           if route.node_uuid <> uuid then route

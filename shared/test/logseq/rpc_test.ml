@@ -1,5 +1,6 @@
 open Test_util
 
+module App_model = Model
 module Ds = Datascript
 module Rpc = Rpc
 module Session = Rpc_session
@@ -552,6 +553,97 @@ let sidebar_tag_selection_projects_objects_and_linked_references () =
     (member "uuid" (List.hd (json_items "linkedReferenceBlocks" result)))
     (`String "reference-1")
 
+let linked_reference_outlines_preserve_depth_and_collapse () =
+  List.iter (fun deferred -> List.iter (fun route -> List.iter (fun tag ->
+    let page : Model.entity_summary = {uuid = "target"; title = "Target"} in
+    let parent = synced_block "parent" "Linked parent" in
+    let child = {(synced_block "child" "Child") with Model.parent_id = Some "parent"} in
+    let grandchild = {(synced_block "grandchild" "Grandchild") with Model.parent_id = Some "child"} in
+    let session = configure_plain_session (Session.create_session
+      {Session.default_options with
+        outliner_projection_limit = (if deferred then Some 1 else None);
+        graph_sidebar_pages = Some (fun () -> Some {Graph.favorites = [page]; recent_pages = []});
+        graph_node_destination = Some (fun _ -> Some (page, false));
+        graph_node_is_tag = Some (fun _ -> tag);
+        graph_page_blocks = Some (fun _ -> Some []);
+        graph_node_references = Some (fun _ -> Some [grandchild; parent; child])}) in
+    let open_response = if route then dispatch_json session "openNode" {|{"uuid":"target"}|}
+      else dispatch_json session "selectPage" "target" in
+    let response = if deferred then dispatch_json session "loadPageReferences" "target" else open_response in
+    let rows response =
+      let result = response_result response in
+      if deferred then json_items "referenceBlocks" result
+      else let result = if route then List.hd (json_items "nodeRoutes" result) else result in
+        json_items (if tag then "linkedReferenceBlocks" else "relatedBlocks") result in
+    let expanded = rows response in
+    check_eq ~msg:"reference subtrees use outline order and relative depth"
+      (List.map (fun row -> member "uuid" row, member "depth" row) expanded)
+      [`String "parent", `Int 0; `String "child", `Int 1];
+    check_eq ~msg:"master defaults to two open reference levels" (member "isCollapsed" (List.nth expanded 1)) (`Bool true);
+    check_eq ~msg:"reference parents expose a collapse control" (member "hasChildren" (List.hd expanded)) (`Bool true);
+    let collapsed = dispatch_json session "outlinerEvent" {|{"type":"toggleCollapsed","uuid":"parent","reference":true}|} in
+    if deferred then ignore (dispatch_json session "outlinerEvent"
+      {|{"type":"toggleCollapsed","uuid":"parent","reference":true,"collapsed":true}|});
+    let response = if deferred then dispatch_json session "loadPageReferences" "target" else collapsed in
+    check_eq ~msg:"collapsing a reference hides descendants" (List.map (member "uuid") (rows response)) [`String "parent"];
+    check_eq (member "isCollapsed" (List.hd (rows response))) (`Bool true);
+    ignore (dispatch_json session "outlinerEvent" {|{"type":"toggleCollapsed","uuid":"parent","reference":true}|});
+    if deferred then ignore (dispatch_json session "loadPageReferences" "target");
+    let reopened = dispatch_json session "outlinerEvent" {|{"type":"toggleCollapsed","uuid":"child","reference":true}|} in
+    let response = if deferred then dispatch_json session "loadPageReferences" "target"
+      else reopened in
+    (* Decode the same full/patch payload consumed by both native clients. *)
+    let projection = match Response_snapshot.decode_response (Json.to_string response) with
+      | Ok projection -> projection | Error error -> fail error in
+    let decoded = if deferred then snd (Option.get projection.reference_update)
+      else if route then let node = List.hd projection.node_routes in
+        if tag then node.node_linked_reference_rows else node.node_related_rows
+      else if tag then projection.sidebar.linked_reference_rows else projection.sidebar.related_rows in
+    check_eq ~msg:"native reference rows retain hierarchy and disclosure metadata"
+      (List.map (fun (row : App_model.outline_row) -> row.depth, row.has_children) decoded)
+      [0, true; 1, true; 2, false];
+    check_eq ~msg:"reference disclosure does not alter the page outline's collapse state"
+      (Types.state session).outliner_state.collapsed Outliner.Sset.empty
+  ) [false; true]) [false; true]) [false; true]
+
+let reference_defaults_and_group_order_match_master () =
+  let open Graph_read_test in
+  let conn = new_conn ["block/page"; "block/parent"; "block/order"; "block/refs";
+    "block/journal-day"] ["file/path", string_attr; "file/content", string_attr;
+      "block/collapsed?", one] in
+  transact conn [page "target" "target" "Target" [];
+    journal "old" "Old journal" 20261116; journal "new" "New journal" 20261117;
+    page "alpha" "alpha" "Alpha" []; page "zeta" "zeta" "Zeta" [];
+    entity "config" "Config" [field "file/path" (Ds.String "logseq/config.edn"); field "file/content" (Ds.String "{}")];
+    block "new-parent" "New parent" "new" "new" 9 [refs "block/refs" ["target"]];
+    block "child" "Child" "new" "new-parent" 10 [];
+    block "grandchild" "Grandchild" "new" "child" 11 [];
+    block "old-ref" "Old mention" "old" "old" 1 [refs "block/refs" ["target"]];
+    block "alpha-ref" "Alpha mention" "alpha" "alpha" 2 [refs "block/refs" ["target"]];
+    block "zeta-ref" "Zeta mention" "zeta" "zeta" 3 [refs "block/refs" ["target"]];
+    block "first-ancestor" "First ancestor" "alpha" "alpha" 4 [field "block/order" (Ds.String "a0")];
+    block "second-ancestor" "Second ancestor" "alpha" "alpha" 5 [field "block/order" (Ds.String "a1")];
+    block "later" "Later group" "alpha" "second-ancestor" 6 [field "block/order" (Ds.String "a0"); refs "block/refs" ["target"]];
+    block "earlier" "Earlier group" "alpha" "first-ancestor" 7 [field "block/order" (Ds.String "a1"); refs "block/refs" ["target"]]];
+  let session = Session.create_session {Session.default_options with graph_db = Some (fun () -> Some (Ds.conn_db conn))} in
+  let rows () = Session_outliner.reference_rows session Outliner.empty
+    (Read.references_for_node plain (Ds.conn_db conn) "target") in
+  check_eq ~msg:"default groups sort journals newest first, then page titles descending, and parent partitions by outline order"
+    (List.map (fun (row : Outliner.outliner_row) -> row.block.uuid) (rows ()))
+    ["new-parent"; "child"; "old-ref"; "zeta-ref"; "alpha-ref"; "earlier"; "later"];
+  List.iter (fun (config, expected) ->
+    add conn "config" "file/content" (Ds.String config);
+    let nested = List.filter (fun (row : Outliner.outliner_row) -> row.block.page_id = "new") (rows ()) in
+    check_eq ~msg:("reference open-level config: " ^ config) (List.length nested) expected)
+    ["{:ref/default-open-blocks-level 1}", 1; "{:ref/default-open-blocks-level 3}", 3;
+     "{:ref/default-open-blocks-level -1}", 2; "{:ref/default-open-blocks-level \"3\"}", 2; "invalid edn {", 2];
+  add conn "new-parent" "block/collapsed?" (Ds.Bool true);
+  check_eq ~msg:"stored collapse is respected by reference defaults"
+    (List.length (List.filter (fun (row : Outliner.outliner_row) -> row.block.page_id = "new") (rows ()))) 1;
+  Session_outliner.set_reference_collapsed session "new-parent" false;
+  check_eq ~msg:"temporary disclosure can expand a stored collapsed reference"
+    (List.length (List.filter (fun (row : Outliner.outliner_row) -> row.block.page_id = "new") (rows ()))) 2
+
 let favorite_blocks_select_the_root_subtree () =
   let conn = Ds.create_conn ~schema:Graph_read_test.schema () in
   let open Graph_read_test in
@@ -708,6 +800,27 @@ let mobile_page_references_are_deferred () =
     check_eq ~msg:"node routes share the reference cache" !reads 1;
     check_eq (List.length (json_items "nodeRoutes" opened)) 1
   ) [false; true]
+
+let mobile_journal_home_defers_references_for_its_first_day () =
+  let journal = { (Model.local_block "today-block" "Today" "today-page" None 1) with
+    Model.journal = Some ("Today", 20261116) } in
+  let reference = Model.local_block "today-reference" "Links today" "other-page" None 1 in
+  let reads = ref 0 in
+  let session = Session.create_session {
+    Session.default_options with
+    outliner_projection_limit = Some 32;
+    graph_blocks = Some (fun () -> Some [journal]);
+    graph_node_references = Some (fun uuid ->
+      incr reads; if uuid = journal.page_id then Some [reference] else Some []);
+  } in
+  let first = response_result (dispatch_json session "refresh" "") in
+  check_eq ~msg:"journal first paint leaves references off the launch path" !reads 0;
+  check_eq ~msg:"journal home requests references for the visible day"
+    (member "pendingReferenceUuid" first) (`String journal.page_id);
+  let loaded = response_result (dispatch_json session "loadPageReferences" journal.page_id) in
+  check_eq !reads 1;
+  check_eq (member "uuid" (List.hd (json_items "referenceBlocks" loaded)))
+    (`String reference.uuid)
 
 let search_projects_page_context_and_clears_blank_queries () =
   let page : Model.entity_summary = { uuid = "page-1"; title = "Page one" } in
@@ -1552,6 +1665,200 @@ let tag_autocomplete_candidates_use_canonical_graph_identity () =
   check_eq (List.length candidates) 1;
   check_eq (member "label" (List.hd candidates)) (`String "Project");
   check_eq (member "value" (List.hd candidates)) (`String "tag-uuid")
+
+let with_crowded_page_search f =
+  Search_index_test.with_index (fun index ->
+    let conn = Search_index_test.seeded_conn () in
+    let testpage = "018f7850-0000-7da0-8b3f-6dbb64aa4ee0" in
+    let person = "018f7850-0000-7da0-8b3f-6dbb64aa4ee1" in
+    let person_notes = "018f7850-0000-7da0-8b3f-6dbb64aa4ee2" in
+    let block_rows = List.init 45 (fun i -> 11 + i,
+      Printf.sprintf "018f7850-0000-7da0-8b3f-%012x" (100 + i),
+      Printf.sprintf "A testpa draft about a person %d" i) in
+    let add = Search_index_test.add in
+    ignore (Ds.transact_conn conn ([
+      add 7 "block/uuid" (Ds.Uuid testpage);
+      add 7 "block/name" (Ds.String "testpage");
+      add 7 "block/title" (Ds.String "testpage");
+      add 8 "block/uuid" (Ds.Uuid person);
+      add 8 "block/name" (Ds.String "person");
+      add 8 "block/title" (Ds.String "Person");
+      add 8 "block/tags" (Ds.Ref 10);
+      add 9 "block/uuid" (Ds.Uuid person_notes);
+      add 9 "block/name" (Ds.String "person notes");
+      add 9 "block/title" (Ds.String "Person notes");
+      add 10 "db/ident" (Ds.Keyword "logseq.class/Tag");
+    ] @ List.concat_map (fun (eid, uuid, title) ->
+      [add eid "block/uuid" (Ds.Uuid uuid);
+       add eid "block/title" (Ds.String title);
+       add eid "block/page" (Ds.Ref 1);
+       add eid "block/parent" (Ds.Ref 1)]) block_rows));
+    let db = Ds.conn_db conn in
+    let session = configure_plain_session (Session.create_session {
+      Session.default_options with
+      outliner_projection_limit = Some 32;
+      graph_db = Some (fun () -> Some db);
+      graph_blocks = Some (fun () -> Some [synced_block "editing" "Draft"]);
+      graph_search_page = Some (fun ~offset ~limit query ->
+        Search.search_hits_page ~offset ~limit index db query);
+    }) in
+    let index_blocks () =
+      Search.search_upsert index.path (List.map (fun (_, uuid, title) ->
+        uuid, title, Search_index_test.page_uuid) block_rows) in
+    let index_pages () = Search.search_upsert index.path [
+      testpage, "testpage", testpage;
+      person_notes, "Person notes", person_notes;
+      person, "Person", person;
+    ] in
+    f session testpage person person_notes index_blocks index_pages)
+
+let page_autocomplete_finds_pages_before_and_during_indexing () =
+  with_crowded_page_search (fun session testpage _ _ index_blocks index_pages ->
+    ignore (outliner_block_event session "tapBlock" "editing");
+    let candidates () =
+      outliner_event session {|{"type":"textChanged","title":"[[testpa]]","caretUTF16Offset":8}|}
+      |> json_items "outlinerAutocompleteCandidates" in
+    let check_first message =
+      check_eq ~msg:message (List.map (member "value") (List.take 1 (candidates ())))
+        [`String testpage] in
+    check_first "an existing page is available before the search index is built";
+    index_blocks ();
+    check_first "the page remains first when only matching blocks have been indexed";
+    index_pages ();
+    check_first "matching blocks cannot push a page out of completion";
+    let completed = outliner_event session (Json.to_string (`Assoc [
+      "type", `String "chooseAutocomplete"; "value", `String testpage])) in
+    check_eq (member "title" (member "editing" (member "outlinerState" completed)))
+      (`String "[[testpage]]"))
+
+let global_search_ranks_exact_tags_before_pagination () =
+  with_crowded_page_search (fun session _ person person_notes index_blocks index_pages ->
+    index_blocks ();
+    index_pages ();
+    let search action payload =
+      response_result (dispatch_json session action payload) in
+    let first = search "searchNodes" "person" in
+    let items = json_items "searchResults" first in
+    check_eq ~msg:"the exact tag and the prefix page are first, despite earlier indexed blocks"
+      (List.take 2 (List.map (member "uuid") items)) [`String person; `String person_notes];
+    check_eq (List.map (member "isPage") (List.take 2 items)) [`Bool true; `Bool true];
+    let next offset = search "searchNodesPage"
+      (Printf.sprintf {|{"query":"person","offset":%d}|} offset) in
+    let second = next 20 in
+    let third = next 40 in
+    check_eq (member "searchHasMore" third) (`Bool false);
+    let ids = List.map (member "uuid")
+      (items @ json_items "searchResults" second @ json_items "searchResults" third) in
+    check_eq (List.length ids) 47;
+    check_eq (List.length (List.sort_uniq compare ids)) 47)
+
+let page_autocomplete_matches_master_order () =
+  Search_index_test.with_index (fun index ->
+    let conn = Ds.create_conn ~schema:(Search_index_test.schema @ [
+      "db/ident", {Storage_codec.default_schema_attr with Ds.unique = Some Ds.Identity};
+      "block/tags", {Storage_codec.default_schema_attr with Ds.value_type = Some Ds.RefType;
+        cardinality = Ds.Many}]) () in
+    let names = ["Test page"; "my testpage"; "testpage notes"; "testpage"; "testpa";
+                 "Person"; "Person notes"; "Personal ledger"; "About a person"] in
+    let add = Search_index_test.add in
+    ignore (Ds.transact_conn conn [
+      add 1 "block/uuid" (Ds.Uuid Search_index_test.page_uuid);
+      add 1 "block/name" (Ds.String "movies");
+      add 1 "block/title" (Ds.String "Movies");
+      add 10 "db/ident" (Ds.Keyword "logseq.class/Page")]);
+    List.iteri (fun i title ->
+      let eid = 20 + i in
+      ignore (Ds.transact_conn conn [
+        add eid "block/uuid" (Ds.Uuid (Printf.sprintf "018f7850-0000-7da0-8b3f-%012x" eid));
+        add eid "block/name" (Ds.String (String.lowercase_ascii title));
+        add eid "block/tags" (Ds.Ref 10);
+        add eid "block/title" (Ds.String title)])) names;
+    let block_uuid = "018f7850-0000-7da0-8b3f-0000000003e8" in
+    ignore (Ds.transact_conn conn [
+      add 1000 "block/uuid" (Ds.Uuid block_uuid);
+      add 1000 "block/title" (Ds.String "testpage block");
+      add 1000 "block/page" (Ds.Ref 1);
+      add 1000 "block/parent" (Ds.Ref 1)]);
+    Search.search_upsert index.path [block_uuid, "testpage block", Search_index_test.page_uuid];
+    let make_session () =
+      let db = Ds.conn_db conn in
+      let session = configure_plain_session (Session.create_session {
+        Session.default_options with
+        graph_db = Some (fun () -> Some db);
+        graph_blocks = Some (fun () -> Some [synced_block "editing" "Draft"]);
+        graph_search_page = Some (fun ~offset ~limit query ->
+          Search.search_hits_page ~offset ~limit index db query);
+      }) in
+      ignore (outliner_block_event session "tapBlock" "editing");
+      session in
+    let candidates session query =
+      outliner_event session (Json.to_string (`Assoc [
+        "type", `String "textChanged"; "title", `String ("[[" ^ query);
+        "caretUTF16Offset", `Int (2 + String.length query)]))
+        |> json_items "outlinerAutocompleteCandidates" in
+    let session = make_session () in
+    List.iter (fun (query, expected) ->
+      check_eq ~msg:("master completion order for " ^ query)
+        (List.map (member "label") (candidates session query))
+        (List.map (fun s -> `String s) expected))
+      ["testpa", ["testpa"; "Test page"; "testpage";
+                  "testpage notes"; "my testpage"; "testpage block"];
+       "TESTPAGE", ["testpage"; "Test page";
+                    "testpage notes"; "my testpage"; "testpage block"];
+       "person", ["Person"; "Person notes";
+                  "Personal ledger"; "About a person"];
+       "testpag", ["New page: testpag"; "Test page"; "testpage";
+                   "testpage notes"; "my testpage"; "testpage block"];
+       "test", ["testpa"; "New page: test"; "Test page"; "testpage";
+                "testpage notes"; "my testpage"; "testpage block"]];
+    List.iter (fun limit ->
+      check_eq ~msg:"the caller's page limit is respected"
+        (List.length (Search.page_title_matches ~limit (Ds.conn_db conn) "testpa")) limit)
+      [0; 1; 2; 3];
+    List.iteri (fun i _ ->
+      let eid = 100 + i in
+      let title = Printf.sprintf "Test pa fuzzy %d" i in
+      ignore (Ds.transact_conn conn [
+        add eid "block/uuid" (Ds.Uuid (Printf.sprintf "018f7850-0000-7da0-8b3f-%012x" eid));
+        add eid "block/name" (Ds.String (String.lowercase_ascii title));
+        add eid "block/title" (Ds.String title)])) (List.init 200 Fun.id);
+    let labels = List.map (member "label") (candidates (make_session ()) "testpa") in
+    check_eq ~msg:"master's fuzzy tie order survives bounded retrieval"
+      (List.take 3 labels) [`String "testpa"; `String "Test page"; `String "testpage"];
+    List.iter (fun label -> check ~msg:"exact and prefix candidates survive the candidate limit"
+      (List.mem (`String label) labels)) ["testpa"; "testpage"; "testpage notes"];
+    check (List.length labels <= 20))
+
+let page_autocomplete_keeps_late_stronger_matches () =
+  List.iter (fun (query, early, better) ->
+    Search_index_test.with_index (fun index ->
+      let conn = Search_index_test.seeded_conn () in
+      let add = Search_index_test.add in
+      List.iteri (fun i title ->
+        let eid = 20 + i in
+        ignore (Ds.transact_conn conn [
+          add eid "block/uuid" (Ds.Uuid (Printf.sprintf "018f7850-0000-7da0-8b3f-%012x" eid));
+          add eid "block/name" (Ds.String (String.lowercase_ascii title));
+          add eid "block/title" (Ds.String title)]))
+        (List.init 25 early @ [better]);
+      let db = Ds.conn_db conn in
+      let session = configure_plain_session (Session.create_session {
+        Session.default_options with
+        graph_db = Some (fun () -> Some db);
+        graph_blocks = Some (fun () -> Some [synced_block "editing" "Draft"]);
+        graph_search_page = Some (fun ~offset ~limit query ->
+          Search.search_hits_page ~offset ~limit index db query);
+      }) in
+      ignore (outliner_block_event session "tapBlock" "editing");
+      let labels = outliner_event session (Json.to_string (`Assoc [
+        "type", `String "textChanged"; "title", `String ("[[" ^ query);
+        "caretUTF16Offset", `Int (2 + String.length query)]))
+        |> json_items "outlinerAutocompleteCandidates" |> List.map (member "label") in
+      let existing = List.filter (fun label -> label <> `String ("New page: " ^ query)) labels in
+      check_eq ~msg:("late stronger match ranks first for " ^ query)
+        (List.hd existing) (`String better)))
+    ["testpage", (fun i -> Printf.sprintf "T-e-s-t-p-a-g-e fuzzy %02d" i), "My testpage";
+     "prefix", (fun i -> Printf.sprintf "prefix a very long title %02d" i), "prefix z"]
 
 let page_autocomplete_searches_beyond_sidebar_and_current_page () =
   Search_index_test.with_index (fun index ->
@@ -6615,8 +6922,13 @@ let cases =
     case "search block reveals page and zoom has ancestry" search_block_reveals_page_and_zoom_has_ancestry;
     case "graph assets download and cache binary files" graph_assets_download_and_cache_binary_files;
     case "mobile page references are deferred" mobile_page_references_are_deferred;
+    case "mobile journal home defers references for its first day"
+      mobile_journal_home_defers_references_for_its_first_day;
     case "sidebar tag selection projects objects and linked references"
       sidebar_tag_selection_projects_objects_and_linked_references;
+    case "linked reference outlines preserve depth and collapse"
+      linked_reference_outlines_preserve_depth_and_collapse;
+    case "reference defaults and group order match master" reference_defaults_and_group_order_match_master;
     case "favorite blocks select the root subtree" favorite_blocks_select_the_root_subtree;
     case "sidebar page selection projects references without node routes"
       sidebar_page_selection_projects_references_without_node_routes;
@@ -6655,6 +6967,12 @@ let cases =
     case "block reference completion saves the selected UUID" block_reference_completion_saves_the_selected_uuid;
     case "page autocomplete searches beyond sidebar and current page"
       page_autocomplete_searches_beyond_sidebar_and_current_page;
+    case "page autocomplete finds pages before and during indexing"
+      page_autocomplete_finds_pages_before_and_during_indexing;
+    case "page autocomplete matches master order" page_autocomplete_matches_master_order;
+    case "page autocomplete keeps late stronger matches" page_autocomplete_keeps_late_stronger_matches;
+    case "global search ranks exact tags before pagination"
+      global_search_ranks_exact_tags_before_pagination;
     case "websocket errors distinguish snapshot recovery from apply failures"
       websocket_errors_distinguish_snapshot_recovery_from_apply_failures;
     case "pending sync rejects stale completions and preserves failed block"

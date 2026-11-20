@@ -7,7 +7,7 @@ type retained_row = {
   editing_caret : int;
 }
 val make_retained_outline_row :
-  Model.logseq_model -> Model.outline_row -> retained_row
+  ?edit_scope:string -> Model.logseq_model -> Model.outline_row -> retained_row
 val retained_outliner_rows : Model.logseq_model -> retained_row list
 val first_journal_section_visible_ : Model.logseq_model -> bool
 val retained_row_value : retained_row -> Model.outline_row
@@ -32,6 +32,7 @@ val windowed_keyed :
 type reference_entry =
   | Result_views of string
   | Reference_heading of string * string
+  | Reference_page of string * Model.sidebar_page
   | Empty_tag
   | Reference_row of string * Model.outline_row
 val reference_entries : Model.logseq_model -> reference_entry list

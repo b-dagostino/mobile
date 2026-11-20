@@ -121,6 +121,12 @@ type outliner_patch_plan =
   | Patch_blocks of string list
   | Structural_diff
 
+val unseen_template_copies :
+  Datascript.db -> Outliner_state.outliner_context -> Pending_ops.pending_operation list ->
+  Cache_model.block list
+(** Template blocks a staged operation copied under a visible block that the
+    optimistic outline does not show yet. *)
+
 val event_patch_plan :
   ?db:Datascript.db ->
   Outliner_state.outliner_message ->
@@ -135,5 +141,7 @@ val refresh_reference_metadata :
   Outliner_state.outliner_context
 
 val references_for_node : Session_types.session -> string -> Cache_model.block list
+val reference_rows : Session_types.session -> Outliner_state.outliner_state -> Cache_model.block list -> Outliner_state.outliner_row list
+val set_reference_collapsed : Session_types.session -> string -> bool -> unit
 val pending_reference_uuid : Session_types.session -> string option
 val load_page_references : Session_types.session -> string -> unit

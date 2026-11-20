@@ -231,11 +231,17 @@ let flashcard input =
       { Model.flashcard_uuid;
         question_hidden = block_markup_text false block;
         question_revealed = block_markup_text true block;
-        card_categories = sidebar_pages_member "references" block;
+        (* The Card class is an implementation marker, not a category chosen
+           by the user. Older projections could include it among references. *)
+        card_categories =
+          List.filter
+            (fun (page : Model.sidebar_page) ->
+              page.uuid <> "00000002-1358-2811-0900-000000000000")
+            (sidebar_pages_member "references" block);
         answer_rows; has_cloze }
   | None -> None
 
-let outline_row_from_block youtube_target_url opens_as_page depth
+let rec outline_row_from_block youtube_target_url opens_as_page depth
     has_children is_collapsed fields =
   match string_member "uuid" fields, string_member "title" fields with
   | Some row_uuid, Some row_title ->
@@ -247,6 +253,12 @@ let outline_row_from_block youtube_target_url opens_as_page depth
         row_task_dates_json = (match List.assoc_opt "taskDates" fields with Some (`Assoc _ as value) -> Yojson.Basic.to_string value | _ -> "");
         row_list_number = int_member "listNumber" fields;
         row_is_embed = bool_member "isEmbed" fields;
+        row_embed_source_uuid = string_member "embedSourceUuid" fields;
+        row_embed_children = filter_map_option (fun child ->
+          let fields = object_fields child in
+          outline_row_from_block (string_member "youtubeTargetURL" fields)
+            false 0 false (bool_member "isCollapsed" fields) fields)
+          (list_member "embedChildren" fields);
         row_display_type = string_member "displayType" fields; row_loaded = not (bool_member "isShell" fields);
         row_cached = false;
         query_json = (match List.assoc_opt "query" fields with
@@ -294,7 +306,8 @@ let related_row input =
   in
   outline_row_from_block
     (string_member "youtubeTargetURL" fields)
-    opens_as_page 0 false false fields
+    opens_as_page (Option.value ~default:0 (int_member "depth" fields))
+    (bool_member "hasChildren" fields) (bool_member "isCollapsed" fields) fields
 
 let outliner_rows_member name fields =
   filter_map_option outline_row (list_member name fields)

@@ -127,6 +127,8 @@ type outline_row =
   ; row_list_number : int option
   ; row_display_type : string option
   ; row_is_embed : bool
+  ; row_embed_source_uuid : string option
+  ; row_embed_children : outline_row list
   ; markup_json : string
   ; query_json : string
   ; youtube_target_url : string option
@@ -439,6 +441,7 @@ type logseq_model =
   ; outliner_rows : outline_row list
   ; outliner_selected_block_ids : string list
   ; outliner_editing : outliner_editing option
+  ; outliner_edit_scope : string option
   ; outliner_selection_revision : int
   ; outliner_autocomplete : outliner_autocomplete option
   ; outliner_autocomplete_candidates : outliner_autocomplete_candidate list
@@ -491,6 +494,7 @@ type logseq_action =
   | ApplyCoreSnapshot of core_projection
   | BeginOutlinerEdit of string
   | BeginOutlinerEditAt of string * int
+  | BeginEmbeddedOutlinerEdit of string * string * int option
   | EditorCompletion of string * string
   | PasteOutlinerContent of string * string
   | PasteOutlinerText of string * string * int
@@ -499,6 +503,7 @@ type logseq_action =
   | BackspaceOutlinerEditor of string * string * int
   | MoveOutlinerCaret of string * int
   | ToggleOutlinerCollapsed of string
+  | ToggleReferenceCollapsed of string * bool
   | LongPressOutlinerBlock of string
   | BeginOutlinerDrag of string
   | DropOutlinerBlocks of string * string

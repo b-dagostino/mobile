@@ -447,6 +447,8 @@ let journal_outline_row uuid page_id title journal_title journal_day depth =
     row_metadata_json = "{}"; row_task_dates_json = ""; row_list_number = None;
     row_display_type = None;
     row_is_embed = false;
+    row_embed_source_uuid = None;
+    row_embed_children = [];
     row_title = title;
     markup_json = "[]"; query_json = "";
     youtube_target_url = None;
@@ -1648,6 +1650,26 @@ let kotlin_settings_use_full_width_material_controls () =
     ~msg:
       "Material preferences use the native list surface without an Apple card"
     (property renderer general_card Lui_protocol.BackgroundValue) None;
+  List.iter
+    (fun identifier ->
+      let heading = descendant_with_identifier renderer root identifier in
+      check_eq ~msg:(identifier ^ " keeps the Material primary ink")
+        (property_string renderer heading Lui_protocol.ForegroundValue)
+        "primary")
+    [
+      "label.settings.general";
+      "label.settings.editor";
+      "label.settings.sync-server";
+      "label.settings.advanced";
+      "label.settings.about";
+      "label.settings.community";
+    ];
+  let tabs = descendant_with_identifier renderer root "link.settings.tabs" in
+  List.iter
+    (fun padding ->
+      check_eq ~msg:"Tabs keeps native list padding like Theme and Language"
+        (property renderer tabs padding) None)
+    [Lui_protocol.PaddingValue; Lui_protocol.PaddingHorizontal];
   check_eq ~msg:"Settings actions use the Material tonal surface"
     (property_string renderer actions Lui_protocol.BackgroundValue)
     "surface-container-low";
@@ -2874,6 +2896,8 @@ let outline_row uuid title =
     row_metadata_json = "{}"; row_task_dates_json = ""; row_list_number = None;
     row_display_type = None;
     row_is_embed = false;
+    row_embed_source_uuid = None;
+    row_embed_children = [];
     row_title = title;
     markup_json = "[]"; query_json = "";
     youtube_target_url = None;
@@ -3836,6 +3860,9 @@ let flashcards_render_the_main_branch_reveal_and_rating_contract () =
   check_eq ~msg:"the reveal action uses the accent fill"
     (property_string renderer show_cloze Lui_protocol.BackgroundValue)
     "primary";
+  check_eq ~msg:"the reveal label pairs with the accent in both appearances"
+    (property_string renderer show_cloze Lui_protocol.ForegroundValue)
+    "primary-foreground";
   check_eq ~msg:"the reveal action centers its native button label"
     (property_string renderer show_cloze Lui_protocol.TextAlignment)
     "center";
@@ -3853,6 +3880,9 @@ let flashcards_render_the_main_branch_reveal_and_rating_contract () =
   let show_answer =
     descendant_with_identifier renderer screen "button.flashcard.show-answer"
   in
+  check_eq ~msg:"the answer label pairs with the accent in both appearances"
+    (property_string renderer show_answer Lui_protocol.ForegroundValue)
+    "primary-foreground";
   dispatch application (Lui_protocol.Press show_answer);
   flush application;
   let answer_row =
@@ -5308,6 +5338,24 @@ let hide_keyboard_waits_for_saved_outliner_projection () =
     check_eq ~msg:"the rendered row contains the saved title when the editor closes"
       (List.hd finished.outliner_rows).row_title editing.editing_title)
     [([], []); ([change], []); ([], [change])]
+
+let leaving_block_editor_does_not_reopen_capture () =
+  let editing = {Model.editing_uuid = "block-a"; editing_title = "Block";
+    caret_utf16_offset = 5} in
+  let current = Model.update (Model.initial ()) Model.ExpandComposer in
+  let current = {current with Model.composer_draft = "Unsent capture"} in
+  let editing = Model.update current (Model.ApplyCoreSnapshot
+    {(empty_core_projection ()) with is_outliner_patch = true;
+      projection_outliner_editing = Some editing}) in
+  check_eq ~msg:"block editing collapses the capture composer" editing.composer_expanded false;
+  check_eq ~msg:"block editing clears the capture focus request" editing.composer_autofocus false;
+  let finished = Model.update editing (Model.ApplyCoreSnapshot
+    {(empty_core_projection ()) with is_outliner_patch = true}) in
+  check_eq ~msg:"ending editing leaves capture collapsed" finished.composer_expanded false;
+  check_eq ~msg:"ending editing cannot autofocus capture" finished.composer_autofocus false;
+  check_eq ~msg:"the unsent capture draft survives" finished.composer_draft "Unsent capture";
+  let reopened = Model.update finished Model.ExpandComposer in
+  check_eq ~msg:"capture still opens when explicitly requested" reopened.composer_autofocus true
 
 let outliner_return_handoff_retains_one_native_editor_node () =
   let application = App.create (ios_backend ()) in
@@ -6932,6 +6980,31 @@ let journal_navigation_exposes_an_immediate_preview_route () =
   check_eq ~msg:"leaving the route releases its optimistic preview"
     returned.app_navigation_previews []
 
+let journal_home_places_today_references_before_older_days () =
+  let today =
+    journal_outline_row "today-block" "today-page" "Today" "Today" 20261116 0 in
+  let older =
+    journal_outline_row "older-block" "older-page" "Older" "Yesterday" 20261115 0 in
+  let reference = outline_row "today-reference" "Linked from another page" in
+  let current = { (Model.initial ()) with
+    selected_graph_id = Some "graph";
+    outliner_rows = [today; older]; journal_outliner_rows = [today; older];
+    related_rows = [reference] } in
+  let entries = View_rows.page_entries (View_rows.retained_outliner_rows current) current in
+  let ids = List.map View_rows.page_entry_identifier entries in
+  let rec index target at = function
+    | [] -> -1
+    | value :: rest -> if value = target then at else index target (at + 1) rest in
+  let reference_index = index "reference.related.today-reference" 0 ids in
+  let older_index = index "outline.older-block" 0 ids in
+  check ~msg:"today's linked references stay with today instead of trailing the feed"
+    (reference_index >= 0 && reference_index < older_index);
+  let applied = Model.update current (Model.ApplyCoreSnapshot {
+    (empty_core_projection ()) with selected_graph_id = Some "graph";
+    reference_update = Some ("today-page", [reference]) }) in
+  check_eq ~msg:"journal home accepts the deferred reference result for its first day"
+    applied.related_rows [reference]
+
 let block_navigation_exposes_an_immediate_outliner_preview_route () =
   let parent =
     {
@@ -8074,7 +8147,7 @@ let native_page_title_waits_for_the_content_heading_to_scroll () =
   check_eq (property_string renderer heading Lui_protocol.StyleClass) "scroll-section-title"
 
 let search_uses_a_regular_list_and_paginates_on_scroll () =
-  List.iter (fun backend ->
+  List.iter (fun (backend, android) ->
     let application = App.create (backend ()) in
     start application;
     send application (Model.SelectGraph "Work");
@@ -8088,11 +8161,17 @@ let search_uses_a_regular_list_and_paginates_on_scroll () =
     let root () = main_root renderer application in
     let results () = descendant_with_identifier renderer (root ()) "screen.search.results" in
     let list_id = results () in
-    check_eq ~msg:"search uses the regular native list surface"
-      (node renderer list_id) (Some Lui_protocol.ListContainer);
-    check_eq ~msg:"search has no custom virtual data window"
-      (descendant_with_identifier renderer (root ()) "search.window") (-1);
-    check ~msg:"all fetched results retain ordinary keyed rows"
+    check_eq ~msg:"search uses a native scrolling surface"
+      (node renderer list_id)
+      (Some (if android then Lui_protocol.VirtualList else Lui_protocol.ListContainer));
+    let viewport () = if android then
+        descendant_with_identifier renderer (root ()) "search.results.window"
+      else results () in
+    if android then begin
+      dispatch application (Lui_protocol.VisibleRange (viewport (), 395, 410));
+      flush application
+    end;
+    check ~msg:"scrolled fetched results are addressable"
       (descendant_with_identifier renderer (root ()) "search.result.hit-400" <> -1);
     let patch offset has_more rows =
       match Response_snapshot.decode_response (Yojson.Basic.to_string (`Assoc ["ok", `Bool true;
@@ -8105,22 +8184,35 @@ let search_uses_a_regular_list_and_paginates_on_scroll () =
     flush application;
     check_eq ~msg:"paging updates keep the same native scroll surface" (results ()) list_id;
     let before = List.length (App.model application).pending_effects in
-    dispatch application (Lui_protocol.VisibleRange (results (), 14, 19));
-    dispatch application (Lui_protocol.VisibleRange (results (), 14, 19));
+    dispatch application (Lui_protocol.VisibleRange (viewport (), 14, 19));
+    dispatch application (Lui_protocol.VisibleRange (viewport (), 14, 19));
     flush application;
     check_eq ~msg:"repeated visible-range events enqueue only one next page"
       (List.length (App.model application).pending_effects) (before + 1);
-    send application (patch 20 false (List.init 5 (fun i -> i + 20)));
-    send application (patch 20 false (List.init 5 (fun i -> i + 20)));
+    send application (patch 20 true (List.init 20 (fun i -> i + 20)));
+    send application (patch 20 true (List.init 20 (fun i -> i + 20)));
     flush application;
     check_eq ~msg:"duplicate pages cannot duplicate results"
-      (App.model application).search_result_count 25;
+      (App.model application).search_result_count 40;
+    dispatch application (Lui_protocol.VisibleRange (viewport (), 34, 39));
+    flush application;
+    check ~msg:"scrolling the second page requests offset 40"
+      (List.exists (function Model.LoadSearchPageEffect (_, "needle", 40) -> true | _ -> false)
+        (App.model application).pending_effects);
+    send application (patch 40 false (List.init 9 (fun i -> i + 40)));
+    flush application;
+    check_eq ~msg:"all 49 matches are loaded" (App.model application).search_result_count 49;
+    let before = List.length (App.model application).pending_effects in
+    dispatch application (Lui_protocol.VisibleRange (viewport (), 44, 48));
+    flush application;
+    check_eq ~msg:"the final page stops paging"
+      (List.length (App.model application).pending_effects) before;
     send application (Model.ChangeSearchQuery "new query");
     send application (patch 25 false [25]);
     flush application;
     check_eq ~msg:"late pages cannot leak old hits into a new query"
       (App.model application).search_result_pages []
-  ) [ios_backend; kotlin_backend]
+  ) [ios_backend, false; kotlin_backend, true]
 
 let search_navigation_preserves_the_result_list () =
   let application = App.create (ios_backend ()) in
@@ -8346,6 +8438,7 @@ let reference_breadcrumbs_keep_their_navigation_context () =
       let source = { Model.uuid = "source"; title = "Source page" } in
       let parent = { Model.uuid = "parent"; title = "Parent block" } in
       let reference = { (outline_row "reference" "Linked note") with
+        Model.page_id = "source";
         Model.row_breadcrumb = "Source page › Parent block";
         row_breadcrumbs = [source; parent] } in
       let route = node_projection "target" "target" "Target" [reference] [] in
@@ -8368,7 +8461,7 @@ let reference_breadcrumbs_keep_their_navigation_context () =
       flush application;
       let breadcrumbs = descendant_with_identifier renderer root "breadcrumb.related-blocks" in
       check ~msg:"plain body hydration cannot erase existing reference ancestry" (breadcrumbs <> -1);
-      let page = descendant_with_identifier renderer breadcrumbs "button.breadcrumb.source" in
+      let page = descendant_with_identifier renderer root "button.breadcrumb.source" in
       let ancestor = descendant_with_identifier renderer breadcrumbs "button.breadcrumb.parent" in
       check_eq ~msg:"the source page keeps its label"
         (property_string renderer page Lui_protocol.TextValue) source.title;
@@ -8383,6 +8476,47 @@ let reference_breadcrumbs_keep_their_navigation_context () =
       check_eq ~msg:"search breadcrumbs leave the underlying app stack unchanged"
         (if search then current.app_navigation_path else current.search_navigation_path) []
     ) [false; true]
+  ) [ios_backend; kotlin_backend]
+
+let linked_reference_groups_and_disclosure_reach_native_rows () =
+  List.iter (fun backend ->
+    let application = App.create (backend ()) in
+    let source : Model.sidebar_page = {uuid = "source"; title = "Source"} in
+    let ancestor : Model.sidebar_page = {uuid = "ancestor"; title = "Ancestor"} in
+    let base uuid = {(outline_row uuid uuid) with Model.page_id = source.uuid;
+      row_breadcrumbs = [source; ancestor]; row_breadcrumb = "Source › Ancestor"} in
+    let parent = {(base "parent") with has_children = true} in
+    let child = {(base "child") with depth = 1; has_children = true; is_collapsed = true} in
+    let sibling = base "sibling" in
+    start application;
+    send application (Model.RequestAppNode "target");
+    send application (apply_core_snapshot None (empty_sidebar_projection ()) [] false "" []
+      [node_projection "target" "target" "Target" [parent; child; sibling] []]
+      None None [] [] [] false []);
+    flush application;
+    let renderer = Lui_app.runtime application in
+    let root = descendant_with_identifier renderer (Lui_app.root_node application) "screen.node" in
+    let count id = descendant_count_with_identifier renderer root id in
+    check_eq ~msg:"a source page gets one linked-reference heading" (count "reference.page.source") 1;
+    check_eq ~msg:"siblings share their ancestor breadcrumb and nested children do not repeat it"
+      (count "breadcrumb.related-blocks") 1;
+    let row = descendant_with_identifier renderer root "outliner.block.child" in
+    if native_row application row <> -1 then
+      check_eq ~msg:"the native child row retains its relative indent"
+        (Yojson.Basic.Util.member "depth" (native_row_payload application row)) (`Int 1);
+    let collapse = descendant_with_identifier renderer row "button.outliner.collapse.child" in
+    if collapse <> -1 then dispatch application (Lui_protocol.Press collapse)
+    else begin
+      let native = native_row application row in
+      check ~msg:"the child has a native disclosure action" (native <> -1);
+      dispatch application (Lui_protocol.ExtensionEvent (native, "outliner-block-row", "collapse",
+        Lui_protocol.String_map.singleton "uuid" (Lui_protocol.StringValue "child")))
+    end;
+    flush application;
+    check ~msg:"reference disclosure carries its scope across the core effect boundary"
+      (List.exists (function Model.EditorOutlinerEventEffect (_, payload) ->
+        Yojson.Basic.Util.member "reference" (Yojson.Basic.from_string payload) = `Bool true
+        | _ -> false) (App.model application).pending_effects)
   ) [ios_backend; kotlin_backend]
 
 let switching_graphs_resets_the_journal_viewport () =
@@ -8425,7 +8559,7 @@ let switching_graphs_resets_the_journal_viewport () =
     check_eq ~msg:"returning to a graph starts its journals at the top" (start_index ()) 0
   ) [ios_backend; kotlin_backend]
 
-let tagged_nodes_replace_the_linked_references_section () =
+let tagged_nodes_keep_the_linked_references_section () =
   List.iter (fun backend ->
     List.iter (fun destination ->
       List.iter (fun is_tag ->
@@ -8457,7 +8591,7 @@ let tagged_nodes_replace_the_linked_references_section () =
           let tagged = descendant_with_identifier renderer root "section.tag.tagged-nodes" in
           let references = descendant_with_identifier renderer root "section.node.linked-references" in
           check_eq ~msg:"tag pages show their Tagged nodes section" (tagged <> -1) is_tag;
-          check_eq ~msg:"tag pages never also show Linked references" (references <> -1) (not is_tag)
+          check ~msg:"tag pages retain Linked references alongside their objects" (references <> -1)
         ) [false; true]
       ) [false; true]
     ) ["main"; "node"; "search"]
@@ -9340,6 +9474,131 @@ let outliner_task_status_selection_uses_the_core_event_boundary () =
     chosen.pending_effects
     [ Model.SetOutlinerTaskStatusEffect (1, "block-a", done_status) ]
 
+let tweak_order_backend () =
+  let open Lui_protocol in
+  let descendants = Hashtbl.create 64 in
+  let tweaks = Hashtbl.create 16 in
+  let failures = ref [] in
+  let children id = Option.value ~default:[] (Hashtbl.find_opt descendants id) in
+  let unlink id =
+    Hashtbl.filter_map_inplace (fun _ values -> Some (List.filter ((<>) id) values)) descendants
+  in
+  let rec drop id =
+    List.iter drop (children id);
+    Hashtbl.remove descendants id;
+    Hashtbl.remove tweaks id
+  in
+  let rec validate id =
+    if Hashtbl.mem tweaks id then
+      match children id with
+      | [child] -> validate child
+      | values -> failures := (id, List.length values) :: !failures
+  in
+  let backend = { backend_profile = profile IOS SwiftUIHost;
+    apply_batch = (fun batch ->
+      List.iter (function
+        | CreateExtension (id, identifier, _) ->
+          if List.mem identifier ["liquid-glass"; "native-adaptive-insets";
+            "native-navigation-title"; "native-control-tint"] then
+            Hashtbl.replace tweaks id ()
+        | InsertChild (parent, child, index) ->
+          validate child;
+          let values = children parent in
+          Hashtbl.replace descendants parent
+            (List.filteri (fun i _ -> i < index) values @ [child]
+             @ List.filteri (fun i _ -> i >= index) values)
+        | RemoveChild (parent, child) ->
+          Hashtbl.replace descendants parent (List.filter ((<>) child) (children parent))
+        | DetachSubtree id -> unlink id; drop id
+        | DropNode id -> unlink id; Hashtbl.remove descendants id; Hashtbl.remove tweaks id
+        | _ -> ()) batch.ops;
+      true) } in
+  backend, failures
+
+let ios_tweak_mounts_keep_children_before_attachment () =
+  let backend, failures = tweak_order_backend () in
+  let application = App.create backend in
+  let assert_order stage =
+    flush application;
+    check_eq ~msg:(stage ^ " attaches only complete platform tweaks") !failures []
+  in
+  start application;
+  assert_order "signed out";
+  let row = outline_row "editing" "Draft" in
+  let todo = Model.task_status "todo" "logseq.property/status.todo" "Todo" "Todo" in
+  let projection = { (empty_core_projection ()) with
+    selected_graph_id = Some "test-graph"; outliner_rows = [row]; task_statuses = [todo] } in
+  send application (Model.ApplyCoreSnapshot projection);
+  assert_order "journals";
+  let editing = { Model.editing_uuid = "editing"; editing_title = "Draft"; caret_utf16_offset = 5 } in
+  let editing_projection = { projection with projection_outliner_editing = Some editing } in
+  send application (Model.ApplyCoreSnapshot editing_projection);
+  assert_order "editor";
+  let find_toolbar_control identifier =
+    descendant_with_identifier (Lui_app.runtime application)
+      (extension_node application "native-search-presentation") identifier
+  in
+  check ~msg:"editing mounts the toolbar"
+    (find_toolbar_control "button.outliner.editor.hideKeyboard" <> -1);
+  send application (Model.ChangeOutlinerText ("editing", "Draft text", 10));
+  assert_order "typing";
+  send application (Model.SetOutlinerTaskStatus ("editing", "todo"));
+  send application (Model.ApplyCoreSnapshot { editing_projection with
+    task_statuses = [todo]; outliner_rows = [{ row with row_status = Some todo }];
+    projection_outliner_editing = Some { editing with editing_title = "Draft text"; caret_utf16_offset = 10 } });
+  assert_order "Todo";
+  check_eq ~msg:"the toolbar reflects the changed task status"
+    (property_string (Lui_app.runtime application)
+       (find_toolbar_control "button.outliner.editor.task") Lui_protocol.AccessibilityLabel)
+    "Task: Todo";
+  send application (Model.PerformOutlinerToolbarAction "hideKeyboard");
+  let resolve_effects () =
+    List.iter (fun eff ->
+      let id = Model.effect_id eff in
+      send application (Model.DequeueEffect id);
+      send application (Model.ResolveEffect (id, true, "")))
+      (App.model application).pending_effects
+  in
+  resolve_effects ();
+  send application (Model.ApplyCoreSnapshot projection);
+  assert_order "hide keyboard";
+  check ~msg:"hide keyboard restores capture and search"
+    (descendant_with_identifier (Lui_app.runtime application)
+       (native_bottom_chrome (Lui_app.runtime application) application) "button.search" <> -1);
+  send application (Model.ApplyCoreSnapshot { projection with
+    projection_outliner_selected_block_ids = ["editing"] });
+  assert_order "selection toolbar";
+  send application (Model.PerformOutlinerToolbarAction "delete");
+  resolve_effects ();
+  send application (Model.ApplyCoreSnapshot projection);
+  assert_order "selection delete returns to capture";
+  send application Model.OpenSettings;
+  assert_order "settings";
+  send application (Model.ChooseSettingsLanguage "zh-CN");
+  assert_order "language change";
+  send application Model.DismissSettings;
+  assert_order "dismiss settings";
+  send application Model.OpenSearch;
+  send application (Model.RequestSearchNode "page");
+  resolve_effects ();
+  let route = { (node_projection "page" "page" "Page" [] []) with
+    node_outliner_rows = [row]; node_outliner_editing = Some editing } in
+  send application (Model.ApplyCoreSnapshot { projection with node_routes = [route];
+    projection_outliner_editing = Some editing });
+  assert_order "search editor";
+  check ~msg:"the search destination mounts its editor toolbar"
+    (find_toolbar_control "button.outliner.editor.hideKeyboard" <> -1);
+  send application (Model.PerformOutlinerToolbarAction "hideKeyboard");
+  resolve_effects ();
+  send application (Model.ApplyCoreSnapshot { projection with
+    node_routes = [{ route with node_outliner_editing = None }] });
+  assert_order "hide search keyboard";
+  let invalid_backend, invalid = tweak_order_backend () in
+  ignore (invalid_backend.Lui_protocol.apply_batch { generation = 1; ops = [
+    Lui_protocol.CreateExtension (2, "liquid-glass", "");
+    Lui_protocol.InsertChild (1, 2, 0)] });
+  check_eq ~msg:"the ordering check rejects an incomplete tweak" !invalid [(2, 0)]
+
 let kotlin_outliner_markers_match_ios_visual_metrics () =
   let application = App.create (kotlin_backend ()) in
   let todo =
@@ -9606,15 +9865,16 @@ let outliner_long_press_selection_and_toolbar_use_typed_effects () =
          caption;
        check_eq ~msg:"selection actions retain main's fixed widths"
          (property_int renderer button Lui_protocol.WidthValue)
-         (if index = 6 then 52 else 50))
+         (if index = 7 then 52 else 50))
     [
       (0, "app:toolbar-copy", "Copy");
-      (1, "app:toolbar-outdent", "Outdent");
-      (2, "app:toolbar-indent", "Indent");
-      (3, "app:toolbar-delete", "Delete");
-      (4, "app:toolbar-copy-reference", "Copy reference");
-      (5, "app:toolbar-copy-url", "Copy URL");
-      (6, "app:toolbar-unselect", "Unselect");
+      (1, "app:toolbar-tag", "Tag");
+      (2, "app:toolbar-outdent", "Outdent");
+      (3, "app:toolbar-indent", "Indent");
+      (4, "app:toolbar-delete", "Delete");
+      (5, "app:toolbar-copy-reference", "Copy reference");
+      (6, "app:toolbar-copy-url", "Copy URL");
+      (7, "app:toolbar-unselect", "Unselect");
     ];
   check_eq ~msg:"selection replaces Capture"
     (descendant_with_identifier renderer chrome "surface.composer.root")
@@ -9627,6 +9887,38 @@ let outliner_long_press_selection_and_toolbar_use_typed_effects () =
   check_eq ~msg:"selection toolbar actions cross the typed core boundary"
     (App.model application).pending_effects
     [ Model.OutlinerToolbarEffect (1, "copy") ]
+
+let typed_toolbars_keep_reactive_width_and_labels () =
+  let application = App.create (ios_backend ()) in
+  Fun.protect ~finally:(fun () -> ignore (Lui_app.dispose application)) (fun () ->
+    start application;
+    let row = outline_row "block-a" "Block" in
+    let snapshot editing selected rows =
+      send application (apply_core_snapshot None (empty_sidebar_projection ()) [] false "" [] []
+        editing None [] selected rows false []);
+      flush application in
+    let renderer = Lui_app.runtime application in
+    let find identifier =
+      descendant_with_identifier renderer (Lui_app.root_node application) identifier in
+    snapshot None [row.row_uuid] [row];
+    List.iter (fun (viewport, width) ->
+      send application (Model.ApplyViewportWidth viewport);
+      flush application;
+      Alcotest.(check int) "typed selection actions keep responsive widths" width
+        (property_int renderer (find "button.outliner.selection.copy") Lui_protocol.WidthValue))
+      [375, 46; 393, 50; 768, 58; 375, 46];
+    let editing = Some {Model.editing_uuid = row.row_uuid; editing_title = row.row_title; caret_utf16_offset = 0} in
+    let done_status = Some {Model.uuid = "done"; ident = None; title = "Done";
+      icon_type = None; icon_id = None; icon_color = None} in
+    List.iter (fun status ->
+      snapshot editing [] [{row with row_status = status}];
+      check_eq ~msg:"typed editor actions retain their live accessibility label"
+        (property_string renderer (find "button.outliner.editor.task") Lui_protocol.AccessibilityLabel)
+        (View_base.outliner_editor_task_label (App.model application)))
+      [None; done_status; None];
+    snapshot None [] [];
+    check_eq ~msg:"empty selection removes the toolbar" (find "toolbar.outliner.selection") (-1);
+    check_eq ~msg:"ending editing removes the editor toolbar" (find "toolbar.outliner.editor") (-1))
 
 let parent_selection_highlights_visible_descendants () =
   List.iter (fun (ios, backend) ->
@@ -9734,7 +10026,7 @@ let kotlin_outliner_selection_toolbar_uses_compact_material_actions () =
     (property_int renderer toolbar Lui_protocol.Gap)
     4;
   check_eq ~msg:"all selection actions remain directly reachable"
-    (List.length buttons) 7;
+    (List.length buttons) 8;
   List.iter
     (fun button ->
        check_eq ~msg:"Android selection actions use compact 48dp targets"
@@ -10971,6 +11263,7 @@ let cases =
     case "completion-requests-native-caret-selection" completion_requests_native_caret_selection;
     case "autocomplete-selection-waits-for-pending-text-to-settle" autocomplete_selection_waits_for_pending_text_to_settle;
     case "hide-keyboard-waits-for-saved-outliner-projection" hide_keyboard_waits_for_saved_outliner_projection;
+    case "leaving-block-editor-does-not-reopen-capture" leaving_block_editor_does_not_reopen_capture;
     case "outliner-return-handoff-retains-one-native-editor-node" outliner_return_handoff_retains_one_native_editor_node;
     case "composer-draft-restore-focus-and-dismissal-are-owned-by-lg" composer_draft_restore_focus_and_dismissal_are_owned_by_lg;
     case "composer-refocus-always-emits-an-autofocus-edge" composer_refocus_always_emits_an_autofocus_edge;
@@ -11014,6 +11307,7 @@ let cases =
     case "native-navigation-retains-the-journal-and-every-node-route" native_navigation_retains_the_journal_and_every_node_route;
     case "native-navigation-retains-repeated-node-visits" native_navigation_retains_repeated_node_visits;
     case "journal-navigation-exposes-an-immediate-preview-route" journal_navigation_exposes_an_immediate_preview_route;
+    case "journal-home-places-today-references-before-older-days" journal_home_places_today_references_before_older_days;
     case "block-navigation-exposes-an-immediate-outliner-preview-route" block_navigation_exposes_an_immediate_outliner_preview_route;
     case "popped-native-path-restores-root-before-core-route-cleanup" popped_native_path_restores_root_before_core_route_cleanup;
     case "app-and-search-routes-are-retained-by-distinct-native-stacks" app_and_search_routes_are_retained_by_distinct_native_stacks;
@@ -11055,7 +11349,8 @@ let cases =
     case "returning-to-a-scrolled-page-keeps-hydrated-rows-mounted" returning_to_a_scrolled_page_keeps_hydrated_rows_mounted;
     case "search-only-patches-preserve-the-open-outline" search_only_patches_preserve_the_open_outline;
     case "reference-breadcrumbs-keep-their-navigation-context" reference_breadcrumbs_keep_their_navigation_context;
-    case "tagged-nodes-replace-the-linked-references-section" tagged_nodes_replace_the_linked_references_section;
+    case "tagged-nodes-keep-the-linked-references-section" tagged_nodes_keep_the_linked_references_section;
+    case "linked reference groups and disclosure reach native rows" linked_reference_groups_and_disclosure_reach_native_rows;
     case "tag-and-property-pages-hide-blocks-but-keep-objects" tag_and_property_pages_hide_blocks_but_keep_objects;
     case "switching-graphs-resets-the-journal-viewport" switching_graphs_resets_the_journal_viewport;
     case "large-tag-and-reference-sections-virtualize-each-block" large_tag_and_reference_sections_virtualize_each_block;
@@ -11073,12 +11368,14 @@ let cases =
     case "native-toolbar-navigation-replay" native_toolbar_navigation_replay;
     case "outliner-structure-controls-use-native-navigation-and-core-effects" outliner_structure_controls_use_native_navigation_and_core_effects;
     case "outliner-task-status-selection-uses-the-core-event-boundary" outliner_task_status_selection_uses_the_core_event_boundary;
+    case "ios-tweak-mounts-keep-children-before-attachment" ios_tweak_mounts_keep_children_before_attachment;
     case "kotlin-outliner-markers-match-ios-visual-metrics" kotlin_outliner_markers_match_ios_visual_metrics;
     case "ios rows use one native layout and keep typed actions" ios_rows_use_one_native_layout_and_keep_typed_actions;
     case "outliner-rows-render-status-tags-and-sync-failures" outliner_rows_render_status_tags_and_sync_failures;
     case "existing-outliner-tags-remove-from-the-owning-node" existing_outliner_tag_menus_remove_from_the_owning_node;
     case "outliner-long-press-selection-and-toolbar-use-typed-effects" outliner_long_press_selection_and_toolbar_use_typed_effects;
     case "parent selection highlights visible descendants" parent_selection_highlights_visible_descendants;
+    case "typed toolbars keep reactive width and labels" typed_toolbars_keep_reactive_width_and_labels;
     case "pushed-node-selection-has-a-destination-toolbar" pushed_node_selection_has_a_destination_toolbar;
     case "kotlin-outliner-selection-toolbar-uses-compact-material-actions" kotlin_outliner_selection_toolbar_uses_compact_material_actions;
     case "kotlin-outliner-editor-toolbar-uses-a-material-bottom-surface" kotlin_outliner_editor_toolbar_uses_a_material_bottom_surface;

@@ -1,12 +1,30 @@
 {
-  "originHash" : "92925a4afbf12e7a1c40877deb1da433658971b0569cbfc7feb4876321b3a212",
+  "originHash" : "9631458c3aa3a9f303e1967a4ef3570eab540239df27fa7a79e7dc55a0f83ea1",
   "pins" : [
     {
       "identity" : "lui",
       "kind" : "remoteSourceControl",
       "location" : "ssh://git@github.com/logseq/lui.git",
       "state" : {
-        "revision" : "cf618462e1c55e65a19f24a67f832137fb9fb667"
+        "revision" : "8b8c0f423c0bdfdab8a9acb1b83d6762bc28934e"
+      }
+    },
+    {
+      "identity" : "sentry-cocoa",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/getsentry/sentry-cocoa.git",
+      "state" : {
+        "revision" : "aaf96c4a417d30208b3c25d90910d6156ddc973d",
+        "version" : "9.27.0"
+      }
+    },
+    {
+      "identity" : "swiftdraw",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swhitty/SwiftDraw.git",
+      "state" : {
+        "revision" : "dbb4ef98824053ead8c83fa866c2c6054fb41809",
+        "version" : "0.24.0"
       }
     }
   ],
