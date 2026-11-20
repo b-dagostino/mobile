@@ -98,12 +98,21 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
-          if [[ -z "$ANDROID_KEYSTORE" || -z "$ANDROID_KEYSTORE_PASSWORD" ]]; then
-            echo "::error::Configure ANDROID_KEYSTORE (base64) and ANDROID_KEYSTORE_PASSWORD in repository Actions secrets."
-            exit 1
-          fi
           umask 077
-          printf '%s' "$ANDROID_KEYSTORE" | base64 --decode > "$RUNNER_TEMP/android-keystore.jks"
+          if [[ -z "$ANDROID_KEYSTORE" || -z "$ANDROID_KEYSTORE_PASSWORD" ]]; then
+            # Fork builds without signing secrets: sign with a throwaway key so
+            # the APK can still be sideloaded. Not suitable for Play uploads.
+            echo "::warning::No signing secrets configured; generating a throwaway signing key."
+            ANDROID_KEYSTORE_PASSWORD="$(openssl rand -hex 16)"
+            echo "::add-mask::$ANDROID_KEYSTORE_PASSWORD"
+            keytool -genkeypair -keystore "$RUNNER_TEMP/android-keystore.jks" \
+              -alias throwaway -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Logseq fork build" \
+              -storepass:env ANDROID_KEYSTORE_PASSWORD -keypass:env ANDROID_KEYSTORE_PASSWORD
+          else
+            printf '%s' "$ANDROID_KEYSTORE" | base64 --decode > "$RUNNER_TEMP/android-keystore.jks"
+          fi
+          echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
           keytool -list -keystore "$RUNNER_TEMP/android-keystore.jks" \
             -storepass:env ANDROID_KEYSTORE_PASSWORD > /dev/null
 
@@ -276,8 +285,7 @@ jobs:
           key: android-native-${{ runner.os }}-${{ github.sha }}
 
       - name: Sign Android APK and app bundle
-        env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        # ANDROID_KEYSTORE_PASSWORD comes from GITHUB_ENV (Prepare Android signing key).
         run: |
           set -euo pipefail
           trap 'rm -f "$RUNNER_TEMP/android-keystore.jks"' EXIT
