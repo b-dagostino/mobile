@@ -170,6 +170,20 @@ private struct LGDockedKeyboardInsetReader: UIViewRepresentable {
 }
 #endif
 
+private struct LGSheetControlTint: ViewModifier {
+    let isSwitch: Bool
+    @Environment(\.luiSemanticColors) private var colors
+
+    func body(content: Content) -> some View {
+        let tint = colors["primary"] ?? LogseqThemePolicy.accent
+        if isSwitch {
+            content.toggleStyle(SwitchToggleStyle(tint: tint)).tint(tint)
+        } else {
+            content.tint(tint)
+        }
+    }
+}
+
 @MainActor
 enum LGNavigationExtension {
     static let identifier = "native-navigation-stack"
@@ -196,6 +210,7 @@ enum LGNavigationExtension {
                     .keyboardType(kind == "email" ? .emailAddress : kind == "code" ? .numberPad : .default)
                     .textContentType(kind == "email" ? .username : kind == "code" ? .oneTimeCode :
                         kind == "password" ? .password : kind == "new-password" ? .newPassword : nil)
+                    .modifier(LGSheetControlTint(isSwitch: false))
                     .submitLabel(.done))
                 #else
                 return AnyView(content.autocorrectionDisabled())
@@ -209,8 +224,7 @@ enum LGNavigationExtension {
                 properties: [.init(name: "role", kind: .string, isRequired: true)]
             ) { content, context in
                 if case .string("switch") = context.property("role") {
-                    return AnyView(content.toggleStyle(SwitchToggleStyle(tint: LogseqThemePolicy.accent))
-                        .tint(LogseqThemePolicy.accent))
+                    return AnyView(content.modifier(LGSheetControlTint(isSwitch: true)))
                 }
                 return AnyView(content.tint(.primary))
             }
@@ -345,16 +359,26 @@ private struct LGSidebarNavigation: View {
     let context: LUIAppleExtensionViewContext
     @AppStorage("logseq.appearance") private var appearance = "system"
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.logseqDarkTheme) private var darkTheme
 
-    private var background: Color {
-        LogseqThemePolicy.palette(mode: LogseqThemeMode(rawValue: appearance) ?? .system,
-                                  systemIsDark: colorScheme == .dark).background
+    private var palette: LogseqThemePalette {
+        LogseqThemePolicy.palette(
+            mode: LogseqThemeMode(rawValue: appearance) ?? .system,
+            systemIsDark: colorScheme == .dark,
+            darkTheme: darkTheme
+        )
     }
 
     var body: some View {
         let _ = context.revision
+        let palette = palette
+        let background = palette.background
+        let selectionTint = palette.backgroundHex == LogseqThemePolicy.black.backgroundHex
+            ? Color.white
+            : LogseqThemePolicy.accent
         NavigationStack {
             child(at: 0)
+                .accentColor(selectionTint)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(background.ignoresSafeArea())
                 #if os(iOS)
@@ -686,6 +710,7 @@ private struct LGNavigationContent: View {
     @State private var visibleScrollTitle: String?
     @AppStorage("logseq.appearance") private var appearance = "system"
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.logseqDarkTheme) private var darkTheme
     @Environment(\.logseqNativeSearch) private var inheritedSearch
     @Environment(\.lgVerticalToolbar) private var verticalToolbar
     @Environment(\.lgPDFWorkspaceOpen) private var pdfWorkspaceOpen
@@ -794,6 +819,10 @@ private struct LGNavigationContent: View {
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .ignoresSafeArea(.all, edges: .bottom)
+                        // Keep the layout mounted without drawing the capture controls
+                        // beneath the native search bar and its Cancel button.
+                        .opacity(searchVisible ? 0 : 1)
+                        .animation(nil, value: searchVisible)
                         .allowsHitTesting(!searchVisible)
                         .accessibilityHidden(searchVisible)
                     } else {
@@ -1019,7 +1048,8 @@ private struct LGNavigationContent: View {
     private var themePalette: LogseqThemePalette {
         LogseqThemePolicy.palette(
             mode: LogseqThemeMode(rawValue: appearance) ?? .system,
-            systemIsDark: colorScheme == .dark
+            systemIsDark: colorScheme == .dark,
+            darkTheme: darkTheme
         )
     }
 
@@ -1258,9 +1288,12 @@ private struct LGNativeSearchControllerBridge: UIViewControllerRepresentable {
                 }
                 if !controller.isActive {
                     needsInitialFocus = true
-                    controller.isActive = true
+                    // Let editing activate the integrated search bar so UIKit can
+                    // coordinate its expansion with the keyboard in one transition.
+                    if #available(iOS 26.0, *) { focusIfNeeded() }
+                    if !controller.isActive { controller.isActive = true }
                 }
-                if needsInitialFocus, controller.searchBar.searchTextField.becomeFirstResponder() { needsInitialFocus = false }
+                if #unavailable(iOS 26.0) { focusIfNeeded() }
             } else if !state.nativePresented, controller.isActive {
                 controller.isActive = false
             } else if !state.isVisible, !controller.isActive {
@@ -1278,11 +1311,13 @@ private struct LGNativeSearchControllerBridge: UIViewControllerRepresentable {
             host.navigationItem.searchController = nil
         }
 
+        private func focusIfNeeded() {
+            guard state.nativePresented, needsInitialFocus else { return }
+            if controller.searchBar.searchTextField.becomeFirstResponder() { needsInitialFocus = false }
+        }
+
         func didPresentSearchController(_ searchController: UISearchController) {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.state.nativePresented else { return }
-                if searchController.searchBar.searchTextField.becomeFirstResponder() { self.needsInitialFocus = false }
-            }
+            DispatchQueue.main.async { [weak self] in self?.focusIfNeeded() }
         }
         func willDismissSearchController(_ searchController: UISearchController) {
             needsInitialFocus = false

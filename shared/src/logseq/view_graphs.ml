@@ -154,7 +154,7 @@ let graph_create_sheet (context : Lui_ui.ui_context) model_source send : t =
     View_base.with_int_prop_signal HeightValue
       (Signal.map (fun (current : Model.logseq_model) ->
         if current.new_graph_encrypted && current.new_graph_password_required then 640 else 480) model_source)
-    (sheet ~title:(View_base.tr (Signal.sample model_source) "Add sync graph") ~height:480
+    (View_base.sheet ~model_source ~title:(View_base.tr (Signal.sample model_source) "Add sync graph") ~height:480
       ~accessibility_identifier:"sheet.graph-create"
       ~on_dismiss:(press send Model.DismissCreateGraph)
       [
@@ -218,7 +218,7 @@ let graph_create_sheet (context : Lui_ui.ui_context) model_source send : t =
           ];
       ])
   else
-    sheet ~title:(View_base.tr (Signal.sample model_source) "Add sync graph") ~style_class:"navigation-form"
+    View_base.sheet ~model_source ~title:(View_base.tr (Signal.sample model_source) "Add sync graph") ~style_class:"navigation-form"
       ~accessibility_identifier:"sheet.graph-create"
       ~on_dismiss:(press send Model.DismissCreateGraph)
       [
@@ -270,12 +270,12 @@ let graph_create_sheet (context : Lui_ui.ui_context) model_source send : t =
           ~style_class:"navigation-actions"
           ~accessibility_identifier:"toolbar.graph-create"
           [
-            Lui_elements.toolbar_button ~style_class:"cancellation-action"
+            Lui_elements.toolbar_button ~style_class:"cancellation-action" ~foreground:"foreground"
               ~accessibility_identifier:"button.graph-add.cancel"
               ~disabled:(reactive Model.graph_create_active_ model_source)
               ~on_press:(press send Model.DismissCreateGraph)
               ~text:(View_base.tr (Signal.sample model_source) "Cancel") [];
-            Lui_elements.toolbar_button ~style_class:"confirmation-action"
+            Lui_elements.toolbar_button ~style_class:"confirmation-action" ~foreground:"foreground"
               ~accessibility_identifier:"button.graph-add.confirm"
               ~disabled_signal:
                 (Signal.map View_base.graph_create_disabled_ model_source)
@@ -357,7 +357,7 @@ let graph_delete_dialog (context : Lui_ui.ui_context) model_source send : t
       ]
 
 let graph_picker_overflow_menu model_source send : t =
- fun context parent ->
+ custom (fun context parent ->
    let kotlin_host = Lui_ui.host context = KotlinHost in
    let entries =
      [ dropdown_menu_item ~text:(View_base.tr (Signal.sample model_source) "Settings")
@@ -367,20 +367,21 @@ let graph_picker_overflow_menu model_source send : t =
      ]
    in
    if kotlin_host then
-     menu ~icon:(`app "more-vert") ~label:(View_base.tr (Signal.sample model_source) "More")
-       ~accessibility_identifier:"button.overflow-menu" entries context parent
+     mount context ?parent
+       (menu ~icon:(`app "more-vert") ~label:(View_base.tr (Signal.sample model_source) "More")
+         ~accessibility_identifier:"button.overflow-menu" entries)
    else
-     stack ~width:44 ~height:44
-       [ box ~width:24 ~height:24 ~corner_radius:12 ~border_width:2
-           ~border_color:"foreground" [];
-         menu ~icon:(`app "more-horiz") ~style_class:"capsule" ~label:(View_base.tr (Signal.sample model_source) "More")
-           ~accessibility_identifier:"button.connection" entries ]
-       context parent
+     mount context ?parent
+       (stack ~width:44 ~height:44
+         [ box ~width:24 ~height:24 ~corner_radius:12 ~border_width:2
+             ~border_color:"foreground" [];
+           menu ~icon:(`app "more-horiz") ~style_class:"capsule" ~label:(View_base.tr (Signal.sample model_source) "More")
+             ~accessibility_identifier:"button.connection" entries ]))
 
 let graph_password_sheet (context : Lui_ui.ui_context) model_source send
     : t =
   if Lui_ui.host context = KotlinHost then
-    sheet ~title:(View_base.tr (Signal.sample model_source) "Unlock encrypted graphs") ~height:360
+    View_base.sheet ~model_source ~title:(View_base.tr (Signal.sample model_source) "Unlock encrypted graphs") ~height:360
       ~accessibility_identifier:"sheet.graph-unlock"
       ~on_dismiss:(press send Model.CancelGraphUnlock)
       [
@@ -424,7 +425,7 @@ let graph_password_sheet (context : Lui_ui.ui_context) model_source send
           ];
       ]
   else
-    sheet ~title:(View_base.tr (Signal.sample model_source) "Unlock encrypted graphs") ~style_class:"navigation-form"
+    View_base.sheet ~model_source ~title:(View_base.tr (Signal.sample model_source) "Unlock encrypted graphs") ~style_class:"navigation-form"
       ~accessibility_identifier:"sheet.graph-unlock"
       ~on_dismiss:(press send Model.CancelGraphUnlock)
       [
@@ -447,11 +448,11 @@ let graph_password_sheet (context : Lui_ui.ui_context) model_source send
         ~style_class:"navigation-actions"
         ~accessibility_identifier:"toolbar.graph-unlock"
         [
-          Lui_elements.toolbar_button ~style_class:"cancellation-action"
+          Lui_elements.toolbar_button ~style_class:"cancellation-action" ~foreground:"foreground"
             ~accessibility_identifier:"button.graph-unlock.cancel"
             ~on_press:(press send Model.CancelGraphUnlock)
             ~text:(View_base.tr (Signal.sample model_source) "Cancel") [];
-          Lui_elements.toolbar_button ~style_class:"confirmation-action"
+          Lui_elements.toolbar_button ~style_class:"confirmation-action" ~foreground:"foreground"
             ~accessibility_identifier:"button.graph-unlock"
             ~disabled_signal:
               (Signal.map View_base.graph_unlock_disabled_ model_source)

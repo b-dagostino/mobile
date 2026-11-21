@@ -277,6 +277,8 @@ public final class LGRenderer {
 
 public struct LGRendererRoot: View {
     private let renderer: LGRenderer
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.logseqDarkTheme) private var darkTheme
 
     public init(renderer: LGRenderer) {
         self.renderer = renderer
@@ -290,6 +292,14 @@ public struct LGRendererRoot: View {
                 .menuOrder(.fixed)
                 .modifier(LGImagePreviewModifier(store: renderer.imagePreviews))
                 #if os(iOS)
+                .transformEnvironment(\.luiSemanticColors) { colors in
+                    // The sheet can still animate out after the core drops its theme scope.
+                    let background = LogseqThemePolicy.sheetBackground(
+                        isDark: colorScheme == .dark, darkTheme: darkTheme
+                    )
+                    colors["background"] = colors["background"] ?? background
+                    colors["surface"] = colors["surface"] ?? background
+                }
                 .modifier(LGFileDownloadFeedbackHost())
                 #endif
         } else {

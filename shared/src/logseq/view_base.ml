@@ -10,6 +10,47 @@ let property_title current ~attr ~title =
 
 open Lui_protocol
 
+let dark_background = function "black" -> "#000000" | _ -> "#002D38"
+let main_background theme = Lui_ui.Adaptive { light = "#FCFCFC"; dark = dark_background theme }
+let grouped_row_background = Lui_ui.Adaptive { light = "#FFFFFF"; dark = "#FFFFFF14" }
+let dark_accent = "#9BD3D4"
+
+let sheet ~model_source ?height ?style_class ?detents ?detents_signal ?accessibility_identifier
+    ?on_dismiss ~title ?title_signal children : Lui_elements.t =
+  let content = Lui_elements.sheet ?height ?style_class ?detents ?detents_signal
+    ?accessibility_identifier ?on_dismiss ~title ?title_signal children in
+  Lui_elements.custom (fun context parent ->
+    match Lui_ui.profile context with
+    | { profile_os = IOS; profile_host = SwiftUIHost } ->
+      (* The Apple modal host reads theme tokens from the sheet's ancestors. *)
+      let accent = Lui_ui.Fixed "#037DBA" in
+      let list_sheet = Option.fold ~none:false
+        ~some:(fun style -> List.mem "navigation-list" (String.split_on_char ' ' style)) style_class in
+      let theme = Signal.map (fun (model : Model.logseq_model) -> model.dark_theme) model_source in
+      let tokens = Signal.map (fun theme ->
+        let background = Lui_ui.Adaptive
+          { light = "#F2F2F7"; dark = if theme = "black" then "#1C1C1E" else dark_background theme } in
+        [
+          "background", background;
+          "surface", (if list_sheet then grouped_row_background else background);
+          "card", grouped_row_background;
+          "input", grouped_row_background;
+          "primary", accent;
+          "input-focus", accent;
+        ]) theme in
+      Lui_elements.mount context ?parent
+        (Lui_elements.themed ~tokens_signal:tokens (Lui_elements.stack [content]))
+    | { profile_os = AndroidOS; profile_host = KotlinHost } ->
+      let tokens = Signal.map (fun (model : Model.logseq_model) ->
+        if model.dark_theme = "black" then [
+          "background", Lui_ui.Adaptive { light = "#FCFCFC"; dark = "#1C1C1E" };
+          "surface", Lui_ui.Adaptive { light = "#FFFFFF"; dark = "#2E2E30" };
+          "card", Lui_ui.Adaptive { light = "#FFFFFF"; dark = "#2E2E30" };
+        ] else []) model_source in
+      Lui_elements.mount context ?parent
+        (Lui_elements.themed ~tokens_signal:tokens (Lui_elements.stack [content]))
+    | _ -> Lui_elements.mount context ?parent content)
+
 let node_icon (current : Model.logseq_model) uuid =
   Option.value ~default:"" (String_map.find_opt uuid current.node_icons)
 
@@ -19,13 +60,13 @@ let outliner_node_icon current (row : Model.outline_row) =
 
 let node_icon_view ?(muted = false) ~size source : Lui_elements.t =
   Lui_elements.if_ ~test:(Signal.map (fun value -> value <> "") source)
-    (fun context parent ->
+    (Lui_elements.custom (fun context parent ->
       let node = Lui_ui.extension context "node-icon" in
       Lui_elements.attach context parent node;
       Lui_ui.extension_property_signal context node "payload" (Signal.map (fun value -> StringValue value) source);
       Lui_ui.extension_property context node "size" (IntValue size);
       Lui_ui.extension_property context node "muted" (BoolValue muted);
-      node)
+      node))
 
 let string_wire_value value = StringValue value
 let int_wire_value value = IntValue value
@@ -1248,12 +1289,6 @@ let settings_language_title (current : Model.logseq_model) =
   | Some choice -> tr current choice.title
   | None -> tr current "System"
 
-let settings_appearance_title (current : Model.logseq_model) =
-  match current.appearance with
-  | "light" -> tr current "Light"
-  | "dark" -> tr current "Dark"
-  | _ -> tr current "System"
-
 let settings_language_choice_title (choice : Model.settings_language_choice) =
   choice.title
 
@@ -1541,59 +1576,59 @@ let drawer_disabled_ (current : Model.logseq_model) =
   || sidebar_drag_disabled_ current
 
 let with_label label (elem : Lui_elements.t) : Lui_elements.t =
- fun context parent ->
-   let node = elem context parent in
+ Lui_elements.custom (fun context parent ->
+   let node = Lui_elements.mount context ?parent elem in
    Lui_ui.string_property context node AccessibilityLabel label;
-   node
+   node)
 
 let with_label_signal label (elem : Lui_elements.t) : Lui_elements.t =
- fun context parent ->
-   let node = elem context parent in
+ Lui_elements.custom (fun context parent ->
+   let node = Lui_elements.mount context ?parent elem in
    Lui_ui.string_property_signal context node AccessibilityLabel label;
-   node
+   node)
 
 let with_selected_signal selected (elem : Lui_elements.t) : Lui_elements.t =
- fun context parent ->
-   let node = elem context parent in
+ Lui_elements.custom (fun context parent ->
+   let node = Lui_elements.mount context ?parent elem in
    Lui_ui.bool_property_signal context node Selected selected;
-   node
+   node)
 
 let with_string_prop prop value (elem : Lui_elements.t) : Lui_elements.t =
- fun context parent ->
-   let node = elem context parent in
+ Lui_elements.custom (fun context parent ->
+   let node = Lui_elements.mount context ?parent elem in
    Lui_ui.string_property context node prop value;
-   node
+   node)
 
 let with_string_prop_signal prop signal_ (elem : Lui_elements.t)
     : Lui_elements.t =
- fun context parent ->
-   let node = elem context parent in
+ Lui_elements.custom (fun context parent ->
+   let node = Lui_elements.mount context ?parent elem in
    Lui_ui.string_property_signal context node prop signal_;
-   node
+   node)
 
 let with_bool_prop_signal prop signal_ (elem : Lui_elements.t)
     : Lui_elements.t =
- fun context parent ->
-   let node = elem context parent in
+ Lui_elements.custom (fun context parent ->
+   let node = Lui_elements.mount context ?parent elem in
    Lui_ui.bool_property_signal context node prop signal_;
-   node
+   node)
 
 let with_int_prop_signal prop signal_ (elem : Lui_elements.t)
     : Lui_elements.t =
- fun context parent ->
-   let node = elem context parent in
+ Lui_elements.custom (fun context parent ->
+   let node = Lui_elements.mount context ?parent elem in
    Lui_ui.int_property_signal context node prop signal_;
-   node
+   node)
 
 let with_float_prop_signal prop signal_ (elem : Lui_elements.t)
     : Lui_elements.t =
- fun context parent ->
-   let node = elem context parent in
+ Lui_elements.custom (fun context parent ->
+   let node = Lui_elements.mount context ?parent elem in
    Lui_ui.float_property_signal context node prop signal_;
-   node
+   node)
 
 let with_liquid_glass shape (elem : Lui_elements.t) : Lui_elements.t =
- fun context parent ->
+ Lui_elements.custom (fun context parent ->
    match Lui_ui.profile context with
    | { Lui_protocol.profile_os = Lui_protocol.IOS;
        profile_host = Lui_protocol.SwiftUIHost;
@@ -1601,23 +1636,23 @@ let with_liquid_glass shape (elem : Lui_elements.t) : Lui_elements.t =
      let tweak = Lui_ui.platform_tweak context "liquid-glass" in
      Lui_ui.extension_property context tweak "shape"
        (StringValue shape);
-     ignore (elem context (Some tweak));
+     ignore (Lui_elements.mount context ~parent:tweak elem);
      Lui_elements.attach context parent tweak;
      tweak
-   | _ -> elem context parent
+   | _ -> Lui_elements.mount context ?parent elem)
 
 let with_reading_insets (elem : Lui_elements.t) : Lui_elements.t =
- fun context parent ->
+ Lui_elements.custom (fun context parent ->
    match Lui_ui.profile context with
    | { profile_os = IOS; profile_host = SwiftUIHost }
    | { profile_os = AndroidOS; profile_host = KotlinHost } ->
      let tweak = Lui_ui.platform_tweak context "native-adaptive-insets" in
      Lui_ui.extension_property context tweak "breakpoint" (IntValue Model.wide_content_breakpoint);
      Lui_ui.extension_property context tweak "wide-inset" (IntValue 16);
-     ignore (elem context (Some tweak));
+     ignore (Lui_elements.mount context ~parent:tweak elem);
      Lui_elements.attach context parent tweak;
      tweak
-   | _ -> elem context parent
+   | _ -> Lui_elements.mount context ?parent elem)
 
 let icon_of_wire_name (name : string) : Lui_elements.icon =
   if String_kit.starts_with ~prefix:"app:" name then

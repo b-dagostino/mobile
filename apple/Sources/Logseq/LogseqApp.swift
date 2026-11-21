@@ -41,6 +41,7 @@ private final class LGCoreResponseRelay {
 /// The shared top-level view for the app, loaded from the platform-specific App delegates below.
 public struct LogseqRootView : View {
     @AppStorage("logseq.appearance") private var appearance = "system"
+    @AppStorage(LogseqDarkTheme.storageKey) private var darkTheme = LogseqDarkTheme.defaultTheme
     @AppStorage("logseq.language") private var language = "system"
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
@@ -53,6 +54,7 @@ public struct LogseqRootView : View {
 
     public var body: some View {
         appContent
+        .environment(\.logseqDarkTheme, darkTheme)
         .preferredColorScheme(
             appearance == "light" ? .light : (appearance == "dark" ? .dark : nil)
         )
@@ -62,6 +64,7 @@ public struct LogseqRootView : View {
         // Semantic colors inside the LUI tree come from the `theme` prop the
         // OCaml view emits (adaptive light/dark tokens), not a host-side
         // dictionary — the shell keeps its palette for chrome below.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(themePalette.background.ignoresSafeArea())
         .alert("Error", isPresented: Binding(
             get: { errorFeedback.message != nil },
@@ -73,16 +76,6 @@ public struct LogseqRootView : View {
 
     private var appContent: some View {
         LGRendererRoot(renderer: runtime.lgRuntime.renderer)
-            .onAppear {
-                if let window = UIApplication.shared.connectedScenes
-                    .compactMap({ $0 as? UIWindowScene }).flatMap(\.windows)
-                    .first(where: { $0.isKeyWindow }) {
-                    LogseqLaunchTransition.shared.show(in: window)
-                }
-                DispatchQueue.main.async {
-                    LogseqLaunchTransition.shared.finish()
-                }
-            }
             .task {
                 await runtime.runLGApplication()
                 logger.info("App logs are viewable in the Xcode console on Apple platforms")
@@ -137,7 +130,8 @@ public struct LogseqRootView : View {
     private var themePalette: LogseqThemePalette {
         LogseqThemePolicy.palette(
             mode: LogseqThemeMode(rawValue: appearance) ?? .system,
-            systemIsDark: colorScheme == .dark
+            systemIsDark: colorScheme == .dark,
+            darkTheme: darkTheme
         )
     }
 
@@ -171,6 +165,7 @@ public struct LogseqRootView : View {
 
     private struct SettingsHostPayload: Encodable {
         let appearance: String
+        let darkTheme: String
         let language: String
         let systemLanguage: String
         let spellCheck: Bool
@@ -229,6 +224,9 @@ public struct LogseqRootView : View {
                 let defaults = UserDefaults.standard
                 let previousBaseURL = LogseqSettingsPolicy.storedBaseURL(in: defaults)
                 defaults.set(settings.appearance, forKey: "logseq.appearance")
+                if let darkTheme = settings.darkTheme {
+                    defaults.set(LogseqDarkTheme(storedValue: darkTheme).rawValue, forKey: LogseqDarkTheme.storageKey)
+                }
                 defaults.set(
                     LogseqSettingsPolicy.normalizedLanguageID(settings.language),
                     forKey: "logseq.language"
@@ -548,6 +546,7 @@ public struct LogseqRootView : View {
         let rawTabs = defaults.string(forKey: "logseq.mobile.sidebarTabs") ?? ""
         let payload = SettingsHostPayload(
             appearance: defaults.string(forKey: "logseq.appearance") ?? "system",
+            darkTheme: LogseqDarkTheme(storedValue: defaults.string(forKey: LogseqDarkTheme.storageKey)).rawValue,
             language: LogseqSettingsPolicy.normalizedLanguageID(
                 defaults.string(forKey: "logseq.language") ?? "system"
             ),

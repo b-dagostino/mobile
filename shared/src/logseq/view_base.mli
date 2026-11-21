@@ -1,6 +1,14 @@
 val tr : Model.logseq_model -> string -> string
 val tr_named : Model.logseq_model -> string -> string -> string
 val property_title : Model.logseq_model -> attr:string -> title:string -> string
+val main_background : string -> Lui_ui.theme_token_value
+val grouped_row_background : Lui_ui.theme_token_value
+val dark_accent : string
+val sheet :
+  model_source:Model.logseq_model Signal.signal -> ?height:int -> ?style_class:string -> ?detents:string ->
+  ?detents_signal:string Signal.signal -> ?accessibility_identifier:string ->
+  ?on_dismiss:(unit -> unit) -> title:string -> ?title_signal:string Signal.signal ->
+  Lui_elements.t list -> Lui_elements.t
 val outliner_node_icon : Model.logseq_model -> Model.outline_row -> string
 val node_icon : Model.logseq_model -> string -> string
 val node_icon_view : ?muted:bool -> size:int -> string Signal.signal -> Lui_elements.t
@@ -312,7 +320,6 @@ val settings_apply_disabled_ : Model.logseq_model -> bool
 val settings_version : Model.logseq_model -> string
 val settings_revision : Model.logseq_model -> string
 val settings_language_title : Model.logseq_model -> string
-val settings_appearance_title : Model.logseq_model -> string
 val settings_language_choice_title : Model.settings_language_choice -> string
 val settings_language_choice_identifier :
   Model.settings_language_choice -> string

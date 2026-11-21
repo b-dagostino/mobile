@@ -14,6 +14,7 @@ import com.logseq.logseq.AndroidAudioRecorder
 import com.logseq.logseq.AndroidAudioTranscriber
 import com.logseq.logseq.AndroidPlatformServices
 import com.logseq.logseq.CognitoAuthProvider
+import com.logseq.logseq.DEFAULT_DARK_THEME
 import com.logseq.logseq.isNetworkUnavailable
 import com.logseq.logseq.ui.extensions.LogseqDialogs
 import dev.lui.LuiBackend
@@ -136,6 +137,7 @@ internal class LogseqRuntime(
     private var activeBootstrap: kotlinx.coroutines.Job? = null
     private var activeBootstrapHadSession = false
     private var appearance by mutableStateOf("system")
+    private var darkTheme by mutableStateOf(DEFAULT_DARK_THEME)
 
     init {
         bridge.onCoreIdle = { scope.launch { effectDrain?.drain(scope) } }
@@ -155,6 +157,7 @@ internal class LogseqRuntime(
                 val authenticationCode = platformEffects.initialAuthenticationCode()
                 val storage = platformEffects.loadStorageState()
                 appearance = storage.settings.appearance
+                darkTheme = storage.settings.darkTheme
                 storageBaseUrl = storage.baseUrl
 
                 val lifecycle = AndroidGraphLifecycle(
@@ -547,6 +550,7 @@ internal class LogseqRuntime(
         if (effect.kind == "save-settings" && resolution.succeeded) {
             val storage = platformEffects.loadStorageState()
             appearance = storage.settings.appearance
+            darkTheme = storage.settings.darkTheme
             if (storage.baseUrl != storageBaseUrl) {
                 graphCatalogAutoRefresh?.stopPeriodic()
                 hasOpenGraph = false
@@ -934,6 +938,7 @@ internal class LogseqRuntime(
     }
 
     val effectiveAppearance: String get() = appearance
+    val effectiveDarkTheme: String get() = darkTheme
 }
 
 // Recorded audio asset produced by the recording sheet — payload shape

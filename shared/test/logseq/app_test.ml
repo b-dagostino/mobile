@@ -483,6 +483,7 @@ let task_status uuid ident title icon_type icon_id icon_color =
 let settings tabs =
   {
     Model.appearance = "system";
+    dark_theme = "black";
     language = "system";
     system_language = None;
     spell_check = true;
@@ -913,6 +914,26 @@ let settings_preferences_persist_without_dismissing_the_sheet () =
       Model.SaveSettingsEffect
         (4, Model.current_settings auto_correction_disabled);
     ]
+
+let settings_dark_theme_persists_independently_of_appearance () =
+  let initial = Model.initial () in
+  check_eq initial.dark_theme "black";
+  let opened = Model.update initial Model.OpenSettings in
+  let choosing = Model.update opened Model.OpenSettingsDarkThemeMenu in
+  let solarized = Model.update choosing (Model.ChangeDarkTheme "solarized") in
+  check solarized.settings_open;
+  check (not solarized.settings_dark_theme_menu_open);
+  check_eq solarized.appearance "system";
+  check_eq solarized.dark_theme "solarized";
+  let saved = Model.current_settings solarized in
+  check_eq solarized.pending_effects [ Model.SaveSettingsEffect (1, saved) ];
+  let restored = Model.update initial (Model.ApplySettingsSnapshot saved) in
+  let light = Model.update restored (Model.ChangeAppearance "light") in
+  let dark = Model.update light (Model.ChangeAppearance "dark") in
+  check_eq dark.dark_theme "solarized";
+  let fallback = Model.update initial
+    (Model.ApplySettingsSnapshot { saved with dark_theme = "unknown" }) in
+  check_eq fallback.dark_theme "black"
 
 let settings_reject_invalid_connections_and_preserve_required_tabs () =
   let opened =
@@ -2664,7 +2685,7 @@ let sync_details_show_every_server_rejection () =
         | Ok value -> value | Error message -> fail message in
       send application (Model.ApplyCoreSnapshot projection); flush application in
     apply (R.response_result (R.dispatch_json session "startWebSocket" ""));
-    let request = R.required_pending (R.response_result (R.dispatch_json session "beginPendingSync" "")) in
+    let request = R.proxy_asset_upload session in
     let request = if semantic then
       R.required_pending (R.pending_completion session request (`Int 200) (`String "{}") `Null)
       else request in
@@ -11171,6 +11192,8 @@ let cases =
     case "sync-indicator-is-neutral-without-authentication" sync_indicator_is_neutral_without_authentication;
     case "settings-navigation-tabs-and-diagnostics-are-lg-owned" settings_navigation_tabs_and_diagnostics_are_lg_owned;
     case "settings-preferences-persist-without-dismissing-the-sheet" settings_preferences_persist_without_dismissing_the_sheet;
+    case "settings dark theme persists independently of appearance"
+      settings_dark_theme_persists_independently_of_appearance;
     case "settings-reject-invalid-connections-and-preserve-required-tabs" settings_reject_invalid_connections_and_preserve_required_tabs;
     case "settings-snapshot-normalizes-sidebar-tabs-at-the-lg-boundary" settings_snapshot_normalizes_sidebar_tabs_at_the_lg_boundary;
     case "runtime-log-filters-refresh-and-successful-results-enter-lg-state" runtime_log_filters_refresh_and_successful_results_enter_lg_state;
